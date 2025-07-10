@@ -6,10 +6,7 @@ class adaptive_HVAC_control extends IPSModule
 
     public function Create()
     {
-        //Never delete this line!
         parent::Create();
-
-        // Register Properties from form.json
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -24,26 +21,26 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('CoilTempLink', 0);
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
         $this->RegisterPropertyString('MonitoredRooms', '[]');
-
-        // Register Attributes for internal state
+        $this->RegisterPropertyString('CurrentEpsilon', '-');
+        $this->RegisterPropertyString('QTableJSON', '{}');
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
         
-        // Register Timer with the correct prefix matching module.json
+        // Use the short, robust prefix for the timer call
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
     {
         parent::ApplyChanges();
-        $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000); // 2 minutes
-        
-        // Basic validation to set the instance status
+        $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000);
+        $this->SetValue('CurrentEpsilon', $this->ReadAttributeFloat('Epsilon'));
+        $this->SetValue('QTableJSON', $this->ReadAttributeString('QTable'));
         if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
-            $this->SetStatus(104); // Not configured
+            $this->SetStatus(104);
         } else {
-            $this->SetStatus(102); // Active
+            $this->SetStatus(102);
         }
     }
 
@@ -59,69 +56,59 @@ class adaptive_HVAC_control extends IPSModule
             return;
         }
         $this->SetStatus(102);
-
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
-        
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
         $coilTemp = GetValue($this->ReadPropertyInteger('CoilTempLink'));
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
-
         $prevState = $meta['state'] ?? null;
         $prevAction = $meta['action'] ?? $this->getActionPairs()[0];
         $prevTs = $meta['ts'] ?? null;
         $prev_WAD = $meta['WAD'] ?? 0;
-        $prev_D_cold = $meta['D_cold'] ?? 0;
         $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
-
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
-        
         if (empty($monitoredRooms)) {
-            $this->SendDebug('ERROR', 'No rooms configured. Please add rooms to the list in the instance form.', 0);
+            $this->SendDebug('ERROR', 'No rooms configured...', 0);
             $this->SetStatus(104);
             return;
         }
-
         $coilState = max($coilTemp, $minCoil + $hysteresis);
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-
         $r = 0;
         $progress = $prev_WAD - $rawWAD;
         $r += $progress * 10;
         $r += -max(0, $minCoil - $coilState) * 2;
         list($prevP, $prevF) = explode(':', $prevAction);
         $r += -0.01 * (intval($prevP) + intval($prevF));
-        $r += -$prev_D_cold * 5;
-
+        $r += -$rawD_cold * 5;
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
             $this->updateQ($Q, $state, $prevState, $prevAction, $r, $dt);
         }
-
         $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
         list($P, $F) = explode(':', $action);
-
         RequestAction($this->ReadPropertyInteger('PowerOutputLink'), intval($P));
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
         $this->SendDebug('INFO', "State: $state, Reward: $r, Action: P=$P F=$F", 0);
-        
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
         $this->WriteAttributeString('QTable', json_encode($Q));
         $this->WriteAttributeString('MetaData', json_encode($newMeta));
-        
         if ($action !== '0:0') {
             $this->decayEpsilon();
         }
+        $this->SetValue('CurrentEpsilon', $this->ReadAttributeFloat('Epsilon'));
+        $this->SetValue('QTableJSON', json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
     }
 
-    // Public function name MUST NOT have the prefix
     public function ResetLearning() {
         $this->WriteAttributeString('QTable', json_encode([]));
         $this->WriteAttributeString('MetaData', json_encode([]));
         $this->WriteAttributeFloat('Epsilon', 0.4);
+        $this->SetValue('CurrentEpsilon', 0.4);
+        $this->SetValue('QTableJSON', '{}');
         $this->SendDebug('RESET', 'Learning has been reset by the user.', 0);
         echo "Learning has been reset!";
     }
@@ -180,25 +167,20 @@ class adaptive_HVAC_control extends IPSModule
     
     private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
         $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
-        
         foreach ($monitoredRooms as $room) {
             $tempID = $room['tempID'] ?? 0;
             $targetID = $room['targetID'] ?? 0;
             $demandID = $room['demandID'] ?? 0;
             $roomSize = $room['size'] ?? 1;
             $threshold = $room['threshold'] ?? $this->ReadPropertyFloat('Hysteresis');
-
             if ($tempID > 0 && IPS_ObjectExists($tempID) && $targetID > 0 && IPS_ObjectExists($targetID)) {
                 if ($demandID > 0 && IPS_ObjectExists($demandID) && GetValue($demandID) == 1) {
-                    continue; // Skip this room as cooling is not demanded
+                    continue; 
                 }
-                
                 $temp = GetValue($tempID);
                 $target = GetValue($targetID);
                 $deviation = $temp - $target;
-
-                $D_cold = max($D_cold, max(0, -$deviation));
-                
+                $D_cold = max(0, -$deviation);
                 if ($deviation > $threshold) {
                     $hotRoomCount++;
                     $weightedDeviationSum += $deviation * $roomSize;
@@ -206,7 +188,6 @@ class adaptive_HVAC_control extends IPSModule
                 }
             }
         }
-
         $rawWAD = ($totalSizeOfHotRooms > 0) ? ($weightedDeviationSum / $totalSizeOfHotRooms) : 0.0;
         $dBin = min(5, (int)floor($rawWAD));
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
