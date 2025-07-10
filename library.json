@@ -1,0 +1,12 @@
+{
+    "id": "{A921DCD9-B19F-990B-8140-A9823D6392AE}",
+    "name": "Adaptive-HVAC-control",
+    "author": "Artur Fischer",
+    "url": "",
+    "compatibility": {
+        "version": "7.1"
+    },
+    "version": "1.0",
+    "build": 0,
+    "date": 0
+}
