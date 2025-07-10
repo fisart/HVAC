@@ -3,7 +3,7 @@
     "name": "adaptive_HVAC_control",
     "type": 3,
     "vendor": "",
-    "aliases": ["Adaptive Cooling Control],
+    "aliases": ["Adaptive Cooling Control"],
     "parentRequirements": [],
     "childRequirements": [],
     "implemented": [],
