@@ -2,6 +2,21 @@
     "elements": [
         { "type": "Label", "label": "This module adaptively controls an AC system using Q-learning." },
         { "type": "Label", "label": " " },
+        {
+            "type": "Select",
+            "name": "LogLevel",
+            "caption": "Log Level",
+            "options": [
+                { "label": "Off", "value": 0 },
+                { "label": "Error", "value": 1 },
+                { "label": "Warning", "value": 2 },
+                { "label": "Info", "value": 3 },
+                { "label": "Debug", "value": 4 }
+            ],
+            "defaultValue": 3
+        },
+        { "type": "CheckBox", "name": "ManualOverride", "caption": "Manual Override" },
+        { "type": "Label", "label": " " },
         { "type": "Label", "label": "--- Core Links ---" },
         { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
         { "type": "SelectVariable", "name": "PowerOutputLink", "caption": "Power Output Link" },
@@ -26,16 +41,18 @@
         },
         { "type": "Label", "label": " " },
         { "type": "Label", "label": "--- Hyperparameters & Settings ---" },
-        { "type": "ExpansionPanel", "caption": "Advanced Settings", "items": [
-            { "type": "CheckBox", "name": "ManualOverride", "caption": "Manual Override" },
-            { "type": "Select", "name": "LogLevel", "caption": "Log Level", "options": [{"label":"Off","value":0},{"label":"Error","value":1},{"label":"Warning","value":2},{"label":"Info","value":3},{"label":"Debug","value":4}], "defaultValue": 3},
-            { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (Learning Rate)", "suffix": "", "digits": 2, "defaultValue": 0.05 },
-            { "type": "NumberSpinner", "name": "Gamma", "caption": "Gamma (Discount Factor)", "suffix": "", "digits": 2, "defaultValue": 0.9 },
-            { "type": "NumberSpinner", "name": "DecayRate", "caption": "Decay Rate", "suffix": "", "digits": 4, "defaultValue": 0.005 },
-            { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (Global)", "suffix": "°", "digits": 1, "defaultValue": 0.5 },
-            { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Change per Step", "suffix": "%", "defaultValue": 40 },
-            { "type": "NumberSpinner", "name": "MaxFanDelta", "caption": "Max Fan Change per Step", "suffix": "%", "defaultValue": 40 }
-        ]}
+        { 
+            "type": "ExpansionPanel", 
+            "caption": "Advanced Settings", 
+            "items": [
+                { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (Learning Rate)", "suffix": "", "digits": 2, "defaultValue": 0.05 },
+                { "type": "NumberSpinner", "name": "Gamma", "caption": "Gamma (Discount Factor)", "suffix": "", "digits": 2, "defaultValue": 0.9 },
+                { "type": "NumberSpinner", "name": "DecayRate", "caption": "Decay Rate", "suffix": "", "digits": 4, "defaultValue": 0.005 },
+                { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (Global)", "suffix": "°", "digits": 1, "defaultValue": 0.5 },
+                { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Change per Step", "suffix": "%", "defaultValue": 40 },
+                { "type": "NumberSpinner", "name": "MaxFanDelta", "caption": "Max Fan Change per Step", "suffix": "%", "defaultValue": 40 }
+            ]
+        }
     ],
     "actions": [
         { "type": "Button", "label": "Reset Learning", "onClick": "adaptive_HVAC_control_ResetLearning($id);" }
