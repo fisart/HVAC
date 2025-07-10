@@ -24,7 +24,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
-        $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ProcessCoolingLogic', 0, 'adaptive_HVAC_control_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
@@ -155,25 +155,41 @@ class adaptive_HVAC_control extends IPSModule
         if (empty($available)) $available[] = $lastAction;
         return $available;
     }
-
+    
+    // --- MODIFIED FUNCTION ---
     private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
         $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
+        
         foreach ($monitoredRooms as $room) {
-            $tempID = $room['tempID'];
-            $targetID = $room['targetID'];
+            $tempID = $room['tempID'] ?? 0;
+            $targetID = $room['targetID'] ?? 0;
+            $demandID = $room['demandID'] ?? 0; // Get the optional demand variable ID
             $roomSize = $room['size'] ?? 1;
-            if ($tempID > 0 && $targetID > 0 && IPS_ObjectExists($tempID) && IPS_ObjectExists($targetID)) {
+            $threshold = $room['threshold'] ?? $this->ReadPropertyFloat('Hysteresis');
+
+            // --- CORE LOGIC CHANGE ---
+            // Check if the room should be considered at all
+            if ($tempID > 0 && $targetID > 0) {
+                // If a demand variable is set, check its value. If it's 1, skip this room.
+                if ($demandID > 0 && IPS_ObjectExists($demandID) && GetValue($demandID) == 1) {
+                    continue; // Skip to the next room
+                }
+                
+                // If we are here, the room is active. Proceed with temperature checks.
                 $temp = GetValue($tempID);
                 $target = GetValue($targetID);
                 $deviation = $temp - $target;
+
                 $D_cold = max($D_cold, max(0, -$deviation));
-                if ($deviation > 0.5) {
+                
+                if ($deviation > $threshold) {
                     $hotRoomCount++;
                     $weightedDeviationSum += $deviation * $roomSize;
                     $totalSizeOfHotRooms += $roomSize;
                 }
             }
         }
+
         $rawWAD = ($totalSizeOfHotRooms > 0) ? ($weightedDeviationSum / $totalSizeOfHotRooms) : 0.0;
         $dBin = min(5, (int)floor($rawWAD));
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
