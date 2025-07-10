@@ -49,7 +49,7 @@
         }
     ],
     "actions": [
-        { "type": "Button", "label": "Reset Learning", "onClick": "adaptive_HVAC_control_ResetLearning($id);" }
+        { "type": "Button", "label": "Reset Learning", "onClick": "ACIPS_ResetLearning($id);" }
     ],
     "status": [
         { "code": 102, "icon": "active", "caption": "Module is active and learning." },

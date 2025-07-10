@@ -24,7 +24,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
-        $this->RegisterTimer('ProcessCoolingLogic', 0, 'adaptive_HVAC_control_ProcessCoolingLogic($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
