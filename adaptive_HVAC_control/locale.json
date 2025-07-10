@@ -1,0 +1,26 @@
+{
+    "translations": {
+        "de": {
+            "Adaptive Cooling Controller": "Adaptiver Kühlungs-Regler",
+            "Log Level": "Log-Level",
+            "Manual Override": "Manuelle Steuerung",
+            "Alpha (Learning Rate)": "Alpha (Lernrate)",
+            "Gamma (Discount Factor)": "Gamma (Abzinsungsfaktor)",
+            "Epsilon (Exploration Rate)": "Epsilon (Erkundungsrate)",
+            "Decay Rate": "Zerfallsrate",
+            "Hysteresis": "Hysterese",
+            "Max Power Change per Step": "Max. Leistungsänderung pro Schritt",
+            "Max Fan Change per Step": "Max. Lüfteränderung pro Schritt",
+            "Core Links": "Kern-Verknüpfungen",
+            "AC Active Link": "Verknüpfung für Kühlung Aktiv",
+            "Power Output Link": "Verknüpfung für Leistungsausgabe",
+            "Fan Output Link": "Verknüpfung für Lüfterausgabe",
+            "Coil Temperature Link": "Verknüpfung für Spulentemperatur",
+            "Min Coil Temperature Link": "Verknüpfung für Min. Spulentemperatur",
+            "Reset Learning": "Lernen zurücksetzen",
+            "Rooms": "Räume (Temperatur)",
+            "Targets": "Ziele (Soll-Temperatur)",
+            "RoomSizes": "Raumgrößen"
+        }
+    }
+}

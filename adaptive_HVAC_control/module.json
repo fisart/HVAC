@@ -1,0 +1,12 @@
+{
+    "id": "{9619EE08-7F77-AF51-DAD5-2B6A08BDDD59}",
+    "name": "adaptive_HVAC_control",
+    "type": 3,
+    "vendor": "",
+    "aliases": ["Adaptive Cooling Control],
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "ACIPS",
+    "url": ""
+}
