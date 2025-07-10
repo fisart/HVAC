@@ -34,39 +34,17 @@
         { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
         { "type": "SelectVariable", "name": "MinCoilTempLink", "caption": "Min Coil Temperature Link" },
         { "type": "Label", "label": " " },
-        { "type": "Label", "label": "--- Monitored Rooms ---" },
         {
             "type": "List",
-            "name": "Rooms",
-            "caption": "Rooms (Temperature Sensors)",
+            "name": "MonitoredRooms",
+            "caption": "Monitored Rooms",
             "rowCount": 5,
             "add": true,
             "delete": true,
             "columns": [
-                { "caption": "Room Temperature Variable", "name": "variableID", "width": "400px", "add": 0, "edit": { "type": "SelectVariable" } }
-            ]
-        },
-        {
-            "type": "List",
-            "name": "Targets",
-            "caption": "Targets (Target Temperature Variables)",
-            "rowCount": 5,
-            "add": true,
-            "delete": true,
-            "columns": [
-                { "caption": "Target Temperature Variable", "name": "variableID", "width": "400px", "add": 0, "edit": { "type": "SelectVariable" } }
-            ]
-        },
-        {
-            "type": "List",
-            "name": "RoomSizes",
-            "caption": "Room Sizes (Names must EXACTLY match the names from the Rooms/Targets variables)",
-            "rowCount": 5,
-            "add": true,
-            "delete": true,
-            "columns": [
-                { "caption": "Room Name", "name": "name", "width": "200px", "add": "", "edit": { "type": "ValidationTextBox" } },
-                { "caption": "Size (e.g., m²)", "name": "size", "width": "150px", "add": 10, "edit": { "type": "NumberSpinner" } }
+                { "caption": "Temperature Sensor", "name": "tempID", "width": "250px", "add": 0, "edit": { "type": "SelectVariable" } },
+                { "caption": "Target Temperature", "name": "targetID", "width": "250px", "add": 0, "edit": { "type": "SelectVariable" } },
+                { "caption": "Room Size", "name": "size", "width": "150px", "add": 10, "edit": { "type": "NumberSpinner" } }
             ]
         }
     ],

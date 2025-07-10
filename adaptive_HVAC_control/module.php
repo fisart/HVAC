@@ -1,16 +1,12 @@
 <?php
 
-// The class name from your GitHub
 class adaptive_HVAC_control extends IPSModule
 {
     private const OPTIMISTIC_INIT = 1.0;
 
     public function Create()
     {
-        //Never delete this line!
         parent::Create();
-
-        // Register Properties from form.json
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -19,32 +15,22 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyFloat('Hysteresis', 0.5);
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
-
-        // Core Links
         $this->RegisterPropertyInteger('ACActiveLink', 0);
         $this->RegisterPropertyInteger('PowerOutputLink', 0);
         $this->RegisterPropertyInteger('FanOutputLink', 0);
         $this->RegisterPropertyInteger('CoilTempLink', 0);
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
-
-        // NEW: Register the List properties
-        $this->RegisterPropertyString('Rooms', '[]');
-        $this->RegisterPropertyString('Targets', '[]');
-        $this->RegisterPropertyString('RoomSizes', '[]');
-
-        // Register Attributes for internal state
+        $this->RegisterPropertyString('MonitoredRooms', '[]');
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
-        
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'adaptive_HVAC_control_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
     {
         parent::ApplyChanges();
-        $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000); // 2 minutes
-        
+        $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000);
         if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
             $this->SetStatus(104);
         } else {
@@ -64,36 +50,27 @@ class adaptive_HVAC_control extends IPSModule
             return;
         }
         $this->SetStatus(102);
-
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
-        
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
         $coilTemp = GetValue($this->ReadPropertyInteger('CoilTempLink'));
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
-
         $prevState = $meta['state'] ?? null;
         $prevAction = $meta['action'] ?? $this->getActionPairs()[0];
         $prevTs = $meta['ts'] ?? null;
         $prev_WAD = $meta['WAD'] ?? 0;
         $prev_D_cold = $meta['D_cold'] ?? 0;
         $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
-
-        $temps = $this->GetRoomData('Rooms');
-        $targs = $this->GetRoomData('Targets');
-        $sizes = $this->GetRoomSizes();
-
-        if (count($temps) < 1 || count($targs) < 1) {
-            $this->SendDebug('ERROR', 'No rooms or targets configured. Please add variables to the lists in the instance form.', 0);
+        $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
+        if (empty($monitoredRooms)) {
+            $this->SendDebug('ERROR', 'No rooms configured. Please add rooms to the list in the instance form.', 0);
             $this->SetStatus(104);
             return;
         }
-
         $coilState = max($coilTemp, $minCoil + $hysteresis);
-        list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($temps, $targs, $sizes, $coilState, $minCoil);
+        list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-
         $r = 0;
         $progress = $prev_WAD - $rawWAD;
         $r += $progress * 10;
@@ -101,30 +78,24 @@ class adaptive_HVAC_control extends IPSModule
         list($prevP, $prevF) = explode(':', $prevAction);
         $r += -0.01 * (intval($prevP) + intval($prevF));
         $r += -$prev_D_cold * 5;
-
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
             $this->updateQ($Q, $state, $prevState, $prevAction, $r, $dt);
         }
-
         $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
         list($P, $F) = explode(':', $action);
-
         RequestAction($this->ReadPropertyInteger('PowerOutputLink'), intval($P));
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
         $this->SendDebug('INFO', "State: $state, Reward: $r, Action: P=$P F=$F", 0);
-        
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
         $this->WriteAttributeString('QTable', json_encode($Q));
         $this->WriteAttributeString('MetaData', json_encode($newMeta));
-        
         if ($action !== '0:0') {
             $this->decayEpsilon();
         }
     }
 
-    // Public function name MUST NOT have the prefix
     public function ResetLearning() {
         $this->WriteAttributeString('QTable', json_encode([]));
         $this->WriteAttributeString('MetaData', json_encode([]));
@@ -185,13 +156,16 @@ class adaptive_HVAC_control extends IPSModule
         return $available;
     }
 
-    private function discretizeState(array $temps, array $targs, array $sizes, float $coil, float $min): array {
+    private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
         $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
-        foreach ($temps as $name => $temp) {
-            // Find the corresponding target and size using the room name as the key
-            if (isset($targs[$name])) {
-                $deviation = $temp - $targs[$name];
-                $roomSize = $sizes[$name] ?? 1; // Default to size 1 if not specified
+        foreach ($monitoredRooms as $room) {
+            $tempID = $room['tempID'];
+            $targetID = $room['targetID'];
+            $roomSize = $room['size'] ?? 1;
+            if ($tempID > 0 && $targetID > 0 && IPS_ObjectExists($tempID) && IPS_ObjectExists($targetID)) {
+                $temp = GetValue($tempID);
+                $target = GetValue($targetID);
+                $deviation = $temp - $target;
                 $D_cold = max($D_cold, max(0, -$deviation));
                 if ($deviation > 0.5) {
                     $hotRoomCount++;
@@ -212,33 +186,5 @@ class adaptive_HVAC_control extends IPSModule
         $delta = $currentCoil - $previousCoil;
         if ($delta < -0.2) { return -1; } elseif ($delta > 0.2) { return 1; }
         return 0;
-    }
-
-    // NEW: Helper function to read data from simple variable lists
-    private function GetRoomData(string $propertyName): array {
-        $data = [];
-        $list = json_decode($this->ReadPropertyString($propertyName), true);
-        foreach ($list as $item) {
-            $id = $item['variableID'] ?? 0;
-            if ($id > 0 && IPS_ObjectExists($id)) {
-                // Use the variable's ACTUAL name as the key to link temps/targets/sizes
-                $data[IPS_GetName($id)] = GetValue($id);
-            }
-        }
-        return $data;
-    }
-    
-    // NEW: Helper function to read data from the name/value RoomSizes list
-    private function GetRoomSizes(): array {
-        $data = [];
-        $list = json_decode($this->ReadPropertyString('RoomSizes'), true);
-        foreach ($list as $item) {
-            $name = $item['name'];
-            $size = $item['size'] ?? 1;
-            if (!empty($name)) {
-                $data[$name] = $size;
-            }
-        }
-        return $data;
     }
 }
