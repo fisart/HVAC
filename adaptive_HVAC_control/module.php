@@ -7,7 +7,6 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
-        // Register User-Configurable Properties
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -22,13 +21,11 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('CoilTempLink', 0);
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
         $this->RegisterPropertyString('MonitoredRooms', '[]');
-
-        // Register Internal Attributes
+        
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
         
-        // NEW: Register Status Variables for display
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
 
@@ -40,7 +37,6 @@ class adaptive_HVAC_control extends IPSModule
         parent::ApplyChanges();
         $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000);
         
-        // Update display variables on apply
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", $this->ReadAttributeString('QTable'));
 
@@ -64,27 +60,32 @@ class adaptive_HVAC_control extends IPSModule
         }
         $this->SetStatus(102);
         
-        // --- The rest of the logic is unchanged until the very end ---
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
+        
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
         $coilTemp = GetValue($this->ReadPropertyInteger('CoilTempLink'));
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
+
         $prevState = $meta['state'] ?? null;
         $prevAction = $meta['action'] ?? $this->getActionPairs()[0];
         $prevTs = $meta['ts'] ?? null;
         $prev_WAD = $meta['WAD'] ?? 0;
         $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
+
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
+        
         if (empty($monitoredRooms)) {
             $this->SendDebug('ERROR', 'No rooms configured...', 0);
             $this->SetStatus(104);
             return;
         }
+
         $coilState = max($coilTemp, $minCoil + $hysteresis);
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
+
         $r = 0;
         $progress = $prev_WAD - $rawWAD;
         $r += $progress * 10;
@@ -92,16 +93,20 @@ class adaptive_HVAC_control extends IPSModule
         list($prevP, $prevF) = explode(':', $prevAction);
         $r += -0.01 * (intval($prevP) + intval($prevF));
         $r += -$rawD_cold * 5;
+
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
             $this->updateQ($Q, $state, $prevState, $prevAction, $r, $dt);
         }
+
         $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
         list($P, $F) = explode(':', $action);
+
         RequestAction($this->ReadPropertyInteger('PowerOutputLink'), intval($P));
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
         $this->SendDebug('INFO', "State: $state, Reward: $r, Action: P=$P F=$F", 0);
+        
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
         
         $this->WriteAttributeString('QTable', json_encode($Q));
@@ -111,8 +116,6 @@ class adaptive_HVAC_control extends IPSModule
             $this->decayEpsilon();
         }
 
-        // --- MODIFIED SECTION ---
-        // Update the public status variables
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
     }
@@ -122,7 +125,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->WriteAttributeString('MetaData', json_encode([]));
         $this->WriteAttributeFloat('Epsilon', 0.4);
         
-        // Update the display variables immediately on reset
         $this->SetValue("CurrentEpsilon", 0.4);
         $this->SetValue("QTableJSON", '{}');
         
@@ -130,16 +132,6 @@ class adaptive_HVAC_control extends IPSModule
         echo "Learning has been reset!";
     }
 
-    // --- All private helper functions are unchanged ---
-    private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt) { /* ... */ }
-    private function choose(array &$Q, float $epsilon, string $lastAction, string $state): string { /* ... */ }
-    private function decayEpsilon() { /* ... */ }
-    private function getActionPairs(): array { /* ... */ }
-    private function getAvailableActions(string $lastAction): array { /* ... */ }
-    private function discretizeState(array $monitoredRooms, float $coil, float $min): array { /* ... */ }
-    private function getCoilTrendBin(float $currentCoil, float $previousCoil): int { /* ... */ }
-
-    // --- FULL, UNCHANGED HELPER FUNCTIONS FOR COMPLETENESS ---
     private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt) {
         $actions = $this->getActionPairs();
         if (!isset($Q[$sOld])) $Q[$sOld] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
