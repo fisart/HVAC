@@ -1,6 +1,6 @@
 <?php
 
-class AdaptiveCoolingIPS extends IPSModule
+class AHC extends IPSModule
 {
     private const OPTIMISTIC_INIT = 1.0;
 
