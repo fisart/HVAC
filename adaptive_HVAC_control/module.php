@@ -7,6 +7,7 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
+        // Register User-Configurable Properties
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -21,13 +22,16 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('CoilTempLink', 0);
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
         $this->RegisterPropertyString('MonitoredRooms', '[]');
-        $this->RegisterPropertyString('CurrentEpsilon', '-');
-        $this->RegisterPropertyString('QTableJSON', '{}');
+
+        // Register Internal Attributes
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
         
-        // Use the short, robust prefix for the timer call
+        // NEW: Register Status Variables for display
+        $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
+        $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
+
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
@@ -35,8 +39,11 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::ApplyChanges();
         $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000);
-        $this->SetValue('CurrentEpsilon', $this->ReadAttributeFloat('Epsilon'));
-        $this->SetValue('QTableJSON', $this->ReadAttributeString('QTable'));
+        
+        // Update display variables on apply
+        $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
+        $this->SetValue("QTableJSON", $this->ReadAttributeString('QTable'));
+
         if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
             $this->SetStatus(104);
         } else {
@@ -56,6 +63,8 @@ class adaptive_HVAC_control extends IPSModule
             return;
         }
         $this->SetStatus(102);
+        
+        // --- The rest of the logic is unchanged until the very end ---
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
@@ -94,25 +103,43 @@ class adaptive_HVAC_control extends IPSModule
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
         $this->SendDebug('INFO', "State: $state, Reward: $r, Action: P=$P F=$F", 0);
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
+        
         $this->WriteAttributeString('QTable', json_encode($Q));
         $this->WriteAttributeString('MetaData', json_encode($newMeta));
+        
         if ($action !== '0:0') {
             $this->decayEpsilon();
         }
-        $this->SetValue('CurrentEpsilon', $this->ReadAttributeFloat('Epsilon'));
-        $this->SetValue('QTableJSON', json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
+
+        // --- MODIFIED SECTION ---
+        // Update the public status variables
+        $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
+        $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
     }
 
     public function ResetLearning() {
         $this->WriteAttributeString('QTable', json_encode([]));
         $this->WriteAttributeString('MetaData', json_encode([]));
         $this->WriteAttributeFloat('Epsilon', 0.4);
-        $this->SetValue('CurrentEpsilon', 0.4);
-        $this->SetValue('QTableJSON', '{}');
+        
+        // Update the display variables immediately on reset
+        $this->SetValue("CurrentEpsilon", 0.4);
+        $this->SetValue("QTableJSON", '{}');
+        
         $this->SendDebug('RESET', 'Learning has been reset by the user.', 0);
         echo "Learning has been reset!";
     }
 
+    // --- All private helper functions are unchanged ---
+    private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt) { /* ... */ }
+    private function choose(array &$Q, float $epsilon, string $lastAction, string $state): string { /* ... */ }
+    private function decayEpsilon() { /* ... */ }
+    private function getActionPairs(): array { /* ... */ }
+    private function getAvailableActions(string $lastAction): array { /* ... */ }
+    private function discretizeState(array $monitoredRooms, float $coil, float $min): array { /* ... */ }
+    private function getCoilTrendBin(float $currentCoil, float $previousCoil): int { /* ... */ }
+
+    // --- FULL, UNCHANGED HELPER FUNCTIONS FOR COMPLETENESS ---
     private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt) {
         $actions = $this->getActionPairs();
         if (!isset($Q[$sOld])) $Q[$sOld] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
