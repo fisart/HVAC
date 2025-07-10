@@ -54,10 +54,10 @@
             ]
         }
     ],
-    "actions": [
-        { "type": "Button", "label": "Reset Learning", "onClick": "adaptive_HVAC_control_ResetLearning($id);" }
-    ],
-    "status": [
+       "actions": [
+                     { "type": "Button", "label": "Reset Learning", "onClick": "ACIPS_ResetLearning($id);" }
+                  ],
+        "status": [
         { "code": 102, "icon": "active", "caption": "Module is active and learning." },
         { "code": 104, "icon": "inactive", "caption": "Module is not configured properly." },
         { "code": 200, "icon": "inactive", "caption": "Manual override is active." },

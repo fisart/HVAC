@@ -31,7 +31,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterAttributeFloat('Epsilon', 0.3);
         
         // Register Timer with the correct prefix matching module.json
-        $this->RegisterTimer('ProcessCoolingLogic', 0, 'adaptive_HVAC_control_ProcessCoolingLogic($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
