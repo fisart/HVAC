@@ -212,7 +212,7 @@ class adaptive_HVAC_control extends IPSModule
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
         $oBin = min(3, (int)floor($D_cold));
         $hotRoomCountBin = min(3, $hotRoomCount);
-        return [$cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold];
+        return [$cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $D_cold];
     }
     
     private function getCoilTrendBin(float $currentCoil, float $previousCoil): int {
