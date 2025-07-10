@@ -1,5 +1,6 @@
 <?php
 
+// The class name from your GitHub
 class adaptive_HVAC_control extends IPSModule
 {
     private const OPTIMISTIC_INIT = 1.0;
@@ -19,14 +20,14 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
 
-        // Links are now properties
-        $this->RegisterPropertyInteger('HeatActiveLink', 0);
+        // Core Links
+        $this->RegisterPropertyInteger('ACActiveLink', 0);
         $this->RegisterPropertyInteger('PowerOutputLink', 0);
         $this->RegisterPropertyInteger('FanOutputLink', 0);
         $this->RegisterPropertyInteger('CoilTempLink', 0);
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
 
-        // Lists for rooms, targets, sizes
+        // NEW: Register the List properties
         $this->RegisterPropertyString('Rooms', '[]');
         $this->RegisterPropertyString('Targets', '[]');
         $this->RegisterPropertyString('RoomSizes', '[]');
@@ -36,14 +37,15 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
         
-        $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ProcessCoolingLogic', 0, 'adaptive_HVAC_control_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
     {
         parent::ApplyChanges();
-        $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000);
-        if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('HeatActiveLink') === 0) {
+        $this->SetTimerInterval('ProcessCoolingLogic', 120 * 1000); // 2 minutes
+        
+        if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
             $this->SetStatus(104);
         } else {
             $this->SetStatus(102);
@@ -55,7 +57,7 @@ class adaptive_HVAC_control extends IPSModule
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200); return;
         }
-        if (!GetValue($this->ReadPropertyInteger('HeatActiveLink'))) {
+        if (!GetValue($this->ReadPropertyInteger('ACActiveLink'))) {
             $this->SetStatus(201);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
@@ -79,7 +81,13 @@ class adaptive_HVAC_control extends IPSModule
 
         $temps = $this->GetRoomData('Rooms');
         $targs = $this->GetRoomData('Targets');
-        $sizes = $this->GetRoomData('RoomSizes');
+        $sizes = $this->GetRoomSizes();
+
+        if (count($temps) < 1 || count($targs) < 1) {
+            $this->SendDebug('ERROR', 'No rooms or targets configured. Please add variables to the lists in the instance form.', 0);
+            $this->SetStatus(104);
+            return;
+        }
 
         $coilState = max($coilTemp, $minCoil + $hysteresis);
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($temps, $targs, $sizes, $coilState, $minCoil);
@@ -116,6 +124,7 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
 
+    // Public function name MUST NOT have the prefix
     public function ResetLearning() {
         $this->WriteAttributeString('QTable', json_encode([]));
         $this->WriteAttributeString('MetaData', json_encode([]));
@@ -179,9 +188,10 @@ class adaptive_HVAC_control extends IPSModule
     private function discretizeState(array $temps, array $targs, array $sizes, float $coil, float $min): array {
         $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
         foreach ($temps as $name => $temp) {
+            // Find the corresponding target and size using the room name as the key
             if (isset($targs[$name])) {
                 $deviation = $temp - $targs[$name];
-                $roomSize = $sizes[$name] ?? 1;
+                $roomSize = $sizes[$name] ?? 1; // Default to size 1 if not specified
                 $D_cold = max($D_cold, max(0, -$deviation));
                 if ($deviation > 0.5) {
                     $hotRoomCount++;
@@ -195,7 +205,7 @@ class adaptive_HVAC_control extends IPSModule
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
         $oBin = min(3, (int)floor($D_cold));
         $hotRoomCountBin = min(3, $hotRoomCount);
-        return [$cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $D_cold];
+        return [$cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold];
     }
     
     private function getCoilTrendBin(float $currentCoil, float $previousCoil): int {
@@ -204,14 +214,29 @@ class adaptive_HVAC_control extends IPSModule
         return 0;
     }
 
+    // NEW: Helper function to read data from simple variable lists
     private function GetRoomData(string $propertyName): array {
         $data = [];
         $list = json_decode($this->ReadPropertyString($propertyName), true);
         foreach ($list as $item) {
-            // Check for both variable and link target IDs
-            $id = $item['variableID'] ?? $item['InstanceID'] ?? 0;
+            $id = $item['variableID'] ?? 0;
             if ($id > 0 && IPS_ObjectExists($id)) {
+                // Use the variable's ACTUAL name as the key to link temps/targets/sizes
                 $data[IPS_GetName($id)] = GetValue($id);
+            }
+        }
+        return $data;
+    }
+    
+    // NEW: Helper function to read data from the name/value RoomSizes list
+    private function GetRoomSizes(): array {
+        $data = [];
+        $list = json_decode($this->ReadPropertyString('RoomSizes'), true);
+        foreach ($list as $item) {
+            $name = $item['name'];
+            $size = $item['size'] ?? 1;
+            if (!empty($name)) {
+                $data[$name] = $size;
             }
         }
         return $data;

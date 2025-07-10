@@ -20,7 +20,6 @@
         { "type": "Label", "label": "--- Hyperparameters ---" },
         { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (Learning Rate)", "suffix": "", "digits": 2, "defaultValue": 0.05 },
         { "type": "NumberSpinner", "name": "Gamma", "caption": "Gamma (Discount Factor)", "suffix": "", "digits": 2, "defaultValue": 0.9 },
-        { "type": "NumberSpinner", "name": "Epsilon", "caption": "Epsilon (Exploration Rate)", "suffix": "", "digits": 2, "defaultValue": 0.3 },
         { "type": "NumberSpinner", "name": "DecayRate", "caption": "Decay Rate", "suffix": "", "digits": 4, "defaultValue": 0.005 },
         { "type": "Label", "label": " " },
         { "type": "Label", "label": "--- System Settings ---" },
@@ -29,35 +28,55 @@
         { "type": "NumberSpinner", "name": "MaxFanDelta", "caption": "Max Fan Change per Step", "suffix": "%", "defaultValue": 40 },
         { "type": "Label", "label": " " },
         { "type": "Label", "label": "--- Core Links ---" },
-        { "type": "SelectVariable", "name": "HeatActiveLink", "caption": "AC Active Link" },
+        { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
         { "type": "SelectVariable", "name": "PowerOutputLink", "caption": "Power Output Link" },
         { "type": "SelectVariable", "name": "FanOutputLink", "caption": "Fan Output Link" },
         { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
-        { "type": "SelectVariable", "name": "MinCoilTempLink", "caption": "Min Coil Temperature Link" }
+        { "type": "SelectVariable", "name": "MinCoilTempLink", "caption": "Min Coil Temperature Link" },
+        { "type": "Label", "label": " " },
+        { "type": "Label", "label": "--- Monitored Rooms ---" },
+        {
+            "type": "List",
+            "name": "Rooms",
+            "caption": "Rooms (Temperature Sensors)",
+            "rowCount": 5,
+            "add": true,
+            "delete": true,
+            "columns": [
+                { "caption": "Room Temperature Variable", "name": "variableID", "width": "400px", "add": 0, "edit": { "type": "SelectVariable" } }
+            ]
+        },
+        {
+            "type": "List",
+            "name": "Targets",
+            "caption": "Targets (Target Temperature Variables)",
+            "rowCount": 5,
+            "add": true,
+            "delete": true,
+            "columns": [
+                { "caption": "Target Temperature Variable", "name": "variableID", "width": "400px", "add": 0, "edit": { "type": "SelectVariable" } }
+            ]
+        },
+        {
+            "type": "List",
+            "name": "RoomSizes",
+            "caption": "Room Sizes (Names must EXACTLY match the names from the Rooms/Targets variables)",
+            "rowCount": 5,
+            "add": true,
+            "delete": true,
+            "columns": [
+                { "caption": "Room Name", "name": "name", "width": "200px", "add": "", "edit": { "type": "ValidationTextBox" } },
+                { "caption": "Size (e.g., m²)", "name": "size", "width": "150px", "add": 10, "edit": { "type": "NumberSpinner" } }
+            ]
+        }
     ],
     "actions": [
-        { "type": "Button", "label": "Reset Learning", "onClick": "ACIPS_ResetLearning($id);" }
+        { "type": "Button", "label": "Reset Learning", "onClick": "adaptive_HVAC_control_ResetLearning($id);" }
     ],
     "status": [
-        {
-            "code": 102,
-            "icon": "active",
-            "caption": "Module is active and learning."
-        },
-        {
-            "code": 104,
-            "icon": "inactive",
-            "caption": "Module is not configured."
-        },
-        {
-            "code": 200,
-            "icon": "inactive",
-            "caption": "Manual override is active."
-        },
-        {
-            "code": 201,
-            "icon": "inactive",
-            "caption": "AC is not active."
-        }
+        { "code": 102, "icon": "active", "caption": "Module is active and learning." },
+        { "code": 104, "icon": "inactive", "caption": "Module is not configured properly." },
+        { "code": 200, "icon": "inactive", "caption": "Manual override is active." },
+        { "code": 201, "icon": "inactive", "caption": "AC is not active." }
     ]
 }
