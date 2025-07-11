@@ -7,8 +7,7 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
-        // Register User-Configurable Properties
-        // LogLevel is removed as we will use KL_MESSAGE for standard logging
+        // LogLevel is no longer needed as we use KL_MESSAGE for all logs
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
         $this->RegisterPropertyFloat('Gamma', 0.9);
@@ -25,17 +24,12 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('TimerInterval', 120);
         $this->RegisterPropertyInteger('PowerStep', 20);
         $this->RegisterPropertyInteger('FanStep', 20);
-
-        // Register Internal Attributes
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
-        
-        // Register Status Variables for display
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
         $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
-
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
@@ -53,6 +47,21 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
 
+    public function GetConfigurationForParent()
+    {
+        return json_encode([
+            'variableID' => [
+                'type' => 'Select',
+                'caption' => 'Variable',
+                'options' => [
+                    [ 'label' => 'Float', 'value' => [ 'variableType' => 2 ] ],
+                    [ 'label' => 'Integer', 'value' => [ 'variableType' => 1 ] ],
+                    [ 'label' => 'Boolean', 'value' => [ 'variableType' => 0 ] ]
+                ]
+            ]
+        ]);
+    }
+
     public function ProcessCoolingLogic()
     {
         $this->LogMessage('Timer called, starting logic.', KL_MESSAGE);
@@ -64,7 +73,7 @@ class adaptive_HVAC_control extends IPSModule
         $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
         if ($acActiveID === 0) {
             $this->SetStatus(104);
-            $this->LogMessage('Exiting: AC Active Link is not configured.', KL_ERROR);
+            $this->LogMessage('Exiting: AC Active Link is not configured.', KL_MESSAGE);
             return;
         }
         if (!GetValue($acActiveID)) {
@@ -83,6 +92,11 @@ class adaptive_HVAC_control extends IPSModule
             $demandID = $room['demandID'] ?? 0;
             $threshold = $room['threshold'] ?? $hysteresis;
             if ($tempID > 0 && IPS_ObjectExists($tempID) && $targetID > 0 && IPS_ObjectExists($targetID)) {
+                $parentInstanceID = IPS_GetParent($tempID);
+                if (IPS_InstanceExists($parentInstanceID) && IPS_IsInstanceStale($parentInstanceID)) {
+                    $this->LogMessage('Skipping room ' . IPS_GetName($tempID) . ' because its parent instance is stale.', KL_MESSAGE);
+                    continue;
+                }
                 if ($demandID > 0 && IPS_ObjectExists($demandID) && !in_array((int)GetValue($demandID), [1, 2])) {
                     continue; 
                 }
@@ -178,6 +192,7 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '.legend { border: 1px solid #ccc; padding: 10px; margin-bottom: 20px; background-color: #f9f9f9; }';
         $html .= '.legend-item { display: inline-block; margin-right: 20px; }';
         $html .= '.color-box { width: 15px; height: 15px; border: 1px solid #666; display: inline-block; vertical-align: middle; margin-right: 5px; }';
+        $html .= 'ul { margin: 5px 0; padding-left: 20px; } li { margin-bottom: 3px; }';
         $html .= '</style></head><body>';
         $html .= '<h3>Q-Table Visualization Legend</h3>';
         $html .= '<div class="legend">';
@@ -187,8 +202,12 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '<div class="legend-item"><span class="color-box" style="background-color: #90ee90;"></span>Green = Good Action</div>';
         $html .= '<div class="legend-item"><span class="color-box" style="background-color: #ffcccb;"></span>Red = Bad Action</div>';
         $html .= '<div class="legend-item"><span class="color-box" style="background-color: #f0f0f0;"></span>Grey = Unexplored</div>';
-        $html .= '<div style="margin-top: 10px;"><b>State Format: (d|c|o|t|r)</b>';
-        $html .= '<ul><li><b>d:</b> Demand</li><li><b>c:</b> Coil Safety</li><li><b>o:</b> Overcool</li><li><b>t:</b> Coil Trend</li><li><b>r:</b> Room Count</li></ul>';
+        $html .= '<div style="margin-top: 10px;"><b>State Format: (d | c | o | t | r)</b>';
+        $html .= '<ul><li><b>d - Demand Bin:</b> How hot is the HOTTEST room? (0=at target, 5=very hot)</li>';
+        $html .= '<li><b>c - Coil Safety Bin:</b> How close is the coil to freezing? (-2=danger, 5=very safe)</li>';
+        $html .= '<li><b>o - Overcool Bin:</b> Is any room getting TOO cold? (0=none, 3=very overcooled)</li>';
+        $html .= '<li><b>t - Coil Trend Bin:</b> Is the AC actively cooling? (-1=cooling, 0=stable, 1=warming)</li>';
+        $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-3+)</li></ul>';
         $html .= '</div></div>';
         $html .= '<table><thead><tr><th class="state-col">State</th>';
         foreach ($actions as $action) {
@@ -303,7 +322,11 @@ class adaptive_HVAC_control extends IPSModule
     }
     
     private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
-        $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
+        $weightedDeviationSum = 0.0;
+        $totalSizeOfHotRooms = 0.0;
+        $D_cold = 0.0;
+        $hotRoomCount = 0;
+        $maxDeviation = 0.0;
         foreach ($monitoredRooms as $room) {
             $tempID = $room['tempID'] ?? 0;
             $targetID = $room['targetID'] ?? 0;
@@ -317,6 +340,7 @@ class adaptive_HVAC_control extends IPSModule
                 $temp = GetValue($tempID);
                 $target = GetValue($targetID);
                 $deviation = $temp - $target;
+                $maxDeviation = max($maxDeviation, $deviation);
                 $D_cold = max(0, -$deviation);
                 if ($deviation > $threshold) {
                     $hotRoomCount++;
@@ -326,7 +350,7 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
         $rawWAD = ($totalSizeOfHotRooms > 0) ? ($weightedDeviationSum / $totalSizeOfHotRooms) : 0.0;
-        $dBin = min(5, (int)floor($rawWAD));
+        $dBin = min(5, (int)floor($maxDeviation));
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
         $oBin = min(3, (int)floor($D_cold));
         $hotRoomCountBin = min(3, $hotRoomCount);
