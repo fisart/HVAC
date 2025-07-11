@@ -1,7 +1,5 @@
 <?php
 
-<?php
-
 class adaptive_HVAC_control extends IPSModule
 {
     private const OPTIMISTIC_INIT = 1.0;
