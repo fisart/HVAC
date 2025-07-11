@@ -7,6 +7,7 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
+        // Register User-Configurable Properties
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -22,12 +23,17 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
         $this->RegisterPropertyString('MonitoredRooms', '[]');
         $this->RegisterPropertyInteger('TimerInterval', 120);
+
+        // Register Internal Attributes
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
+        
+        // Register Status Variables for display
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
         $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
+
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
@@ -35,9 +41,11 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::ApplyChanges();
         $this->SetTimerInterval('ProcessCoolingLogic', $this->ReadPropertyInteger('TimerInterval') * 1000);
+        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
         $this->UpdateVisualization();
+
         if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
             $this->SetStatus(104);
         } else {
@@ -150,7 +158,6 @@ class adaptive_HVAC_control extends IPSModule
         echo "Visualization Updated!";
     }
 
-    // --- MODIFIED FUNCTION WITH LEGEND ---
     private function GenerateQTableHTML(): string
     {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
@@ -161,10 +168,8 @@ class adaptive_HVAC_control extends IPSModule
         ksort($qTable);
         $actions = $this->getActionPairs();
 
-        // --- HTML & CSS ---
         $html = '<!DOCTYPE html><html><head><style>';
-        $html .= 'body { font-family: sans-serif; font-size: 14px; }';
-        $html .= 'table { border-collapse: collapse; width: 100%; margin-top: 20px; }';
+        $html .= 'body { font-family: sans-serif; font-size: 14px; } table { border-collapse: collapse; width: 100%; margin-top: 20px; }';
         $html .= 'th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }';
         $html .= 'th { background-color: #f2f2f2; position: sticky; top: 0; z-index: 10;}';
         $html .= 'td.state-col { text-align: left; font-weight: bold; min-width: 150px; background-color: #f8f8f8; position: sticky; left: 0; }';
@@ -172,8 +177,6 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '.legend-item { display: inline-block; margin-right: 20px; }';
         $html .= '.color-box { width: 15px; height: 15px; border: 1px solid #666; display: inline-block; vertical-align: middle; margin-right: 5px; }';
         $html .= '</style></head><body>';
-        
-        // --- LEGEND SECTION ---
         $html .= '<h3>Q-Table Visualization Legend</h3>';
         $html .= '<div class="legend">';
         $html .= '<div><b>Rows (Y-Axis):</b> Represent the "State" of the system, which is what the agent currently observes.</div>';
@@ -185,8 +188,6 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '<div style="margin-top: 10px;"><b>State Format: (d|c|o|t|r)</b>';
         $html .= '<ul><li><b>d:</b> Demand Bin (0=cool, 5=very hot)</li><li><b>c:</b> Coil Safety Bin (0=near min, 5=very safe)</li><li><b>o:</b> Overcool Bin (0=none, 3=very overcooled)</li><li><b>t:</b> Coil Trend Bin (-1=cooling, 0=stable, 1=warming)</li><li><b>r:</b> Room Count Bin (number of rooms demanding cooling)</li></ul>';
         $html .= '</div></div>';
-
-        // --- TABLE SECTION ---
         $html .= '<table><thead><tr><th class="state-col">State</th>';
 
         foreach ($actions as $action) {
@@ -220,15 +221,15 @@ class adaptive_HVAC_control extends IPSModule
 
     private function getColorForValue(float $value, float $min, float $max): string
     {
-        if ($value == self::OPTIMISTIC_INIT) return '#f0f0f0'; // Light grey for unexplored
-        if ($max == $min) return '#ffffff'; // White if no range
+        if ($value == self::OPTIMISTIC_INIT) return '#f0f0f0';
+        if ($max == $min) return '#ffffff';
 
-        if ($value >= 0) { // Green scale for positive values
+        if ($value >= 0) {
             $percent = ($max > 0) ? ($value / $max) : 0;
             $g = 255;
             $r = 255 - (int)(150 * $percent);
             $b = 255 - (int)(150 * $percent);
-        } else { // Red scale for negative values
+        } else {
             $percent = ($min < 0) ? ($value / $min) : 0;
             $r = 255;
             $g = 255 - (int)(200 * $percent);
@@ -236,17 +237,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         return sprintf('#%02x%02x%02x', $r, $g, $b);
     }
-    
-    // --- All other functions are unchanged ---
-    private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt) { /* ... */ }
-    private function choose(array &$Q, float $epsilon, string $lastAction, string $state): string { /* ... */ }
-    private function decayEpsilon() { /* ... */ }
-    private function getActionPairs(): array { /* ... */ }
-    private function getAvailableActions(string $lastAction): array { /* ... */ }
-    private function discretizeState(array $monitoredRooms, float $coil, float $min): array { /* ... */ }
-    private function getCoilTrendBin(float $currentCoil, float $previousCoil): int { /* ... */ }
 
-    // --- FULL, UNCHANGED HELPER FUNCTIONS FOR COMPLETENESS ---
     private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt) {
         $actions = $this->getActionPairs();
         if (!isset($Q[$sOld])) $Q[$sOld] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
@@ -258,6 +249,7 @@ class adaptive_HVAC_control extends IPSModule
         $maxFutureQ = empty($Q[$sNew]) ? 0.0 : max($Q[$sNew]);
         $Q[$sOld][$aOld] = $oldQ + $alpha * ($r * $dt + $gamma * $maxFutureQ - $oldQ);
     }
+    
     private function choose(array &$Q, float $epsilon, string $lastAction, string $state): string {
         $actions = $this->getActionPairs();
         if (!isset($Q[$state])) {
@@ -276,14 +268,17 @@ class adaptive_HVAC_control extends IPSModule
         $this->SendDebug('CHOICE', sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), 0);
         return $chosenAction;
     }
+
     private function decayEpsilon() {
         $eps = $this->ReadAttributeFloat('Epsilon');
         $dec = $this->ReadPropertyFloat('DecayRate');
         $this->WriteAttributeFloat('Epsilon', max(0.01, $eps * (1 - $dec)));
     }
+
     private function getActionPairs(): array {
         return ["0:0", "30:30", "30:50", "30:70", "60:40", "60:60", "60:80", "80:70", "80:90", "100:80", "100:100"];
     }
+
     private function getAvailableActions(string $lastAction): array {
         if ($lastAction === '0:0') { return $this->getActionPairs(); }
         list($lastP, $lastF) = array_map('intval', explode(':', $lastAction));
@@ -297,6 +292,7 @@ class adaptive_HVAC_control extends IPSModule
         if (empty($available)) $available[] = $lastAction;
         return $available;
     }
+    
     private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
         $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
         foreach ($monitoredRooms as $room) {
@@ -327,6 +323,7 @@ class adaptive_HVAC_control extends IPSModule
         $hotRoomCountBin = min(3, $hotRoomCount);
         return [$cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $D_cold];
     }
+    
     private function getCoilTrendBin(float $currentCoil, float $previousCoil): int {
         $delta = $currentCoil - $previousCoil;
         if ($delta < -0.2) { return -1; } elseif ($delta > 0.2) { return 1; }
