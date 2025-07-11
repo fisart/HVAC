@@ -134,6 +134,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode($Q, JSON_PRETTY_PRINT));
+        $this->UpdateVisualization(); // This is the required fix
         $this->LogMessage("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_MESSAGE);
     }
 
@@ -160,6 +161,7 @@ class adaptive_HVAC_control extends IPSModule
     private function GenerateQTableHTML(): string {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($qTable) || empty($qTable)) {
+            $this->LogMessage('GenerateQTableHTML: Q-Table is empty or invalid.', KL_MESSAGE);
             return '<p>Q-Table is empty. Run the learning process to populate it.</p>';
         }
         ksort($qTable);
@@ -296,7 +298,6 @@ class adaptive_HVAC_control extends IPSModule
         return $available;
     }
     
-    // --- MODIFIED FUNCTION ---
     private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
         $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
         foreach ($monitoredRooms as $room) {
@@ -305,15 +306,10 @@ class adaptive_HVAC_control extends IPSModule
             $demandID = $room['demandID'] ?? 0;
             $roomSize = $room['size'] ?? 1;
             $threshold = $room['threshold'] ?? $this->ReadPropertyFloat('Hysteresis');
-
             if ($tempID > 0 && IPS_ObjectExists($tempID) && $targetID > 0 && IPS_ObjectExists($targetID)) {
-                
-                // --- NEW DEMAND LOGIC ---
-                // If a demand variable is linked, check if its value is 1 or 2. If not, skip the room.
                 if ($demandID > 0 && IPS_ObjectExists($demandID) && !in_array(GetValue($demandID), [1, 2])) {
                     continue; 
                 }
-
                 $temp = GetValue($tempID);
                 $target = GetValue($targetID);
                 $deviation = $temp - $target;
