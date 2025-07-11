@@ -7,7 +7,6 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
-        // Register User-Configurable Properties
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -23,17 +22,14 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
         $this->RegisterPropertyString('MonitoredRooms', '[]');
         $this->RegisterPropertyInteger('TimerInterval', 120);
-
-        // Register Internal Attributes
+        $this->RegisterPropertyInteger('PowerStep', 20);
+        $this->RegisterPropertyInteger('FanStep', 20);
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
-        
-        // Register Status Variables for display
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
         $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
-
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
@@ -41,11 +37,9 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::ApplyChanges();
         $this->SetTimerInterval('ProcessCoolingLogic', $this->ReadPropertyInteger('TimerInterval') * 1000);
-        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
         $this->UpdateVisualization();
-
         if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
             $this->SetStatus(104);
         } else {
@@ -67,7 +61,6 @@ class adaptive_HVAC_control extends IPSModule
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             return;
         }
-
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
         $isCoolingNeeded = false;
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
@@ -84,7 +77,6 @@ class adaptive_HVAC_control extends IPSModule
                 }
             }
         }
-
         if (!$isCoolingNeeded) {
             $this->SendDebug('IDLE', 'No rooms require cooling. Setting output to 0 and exiting.', 0);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
@@ -92,7 +84,6 @@ class adaptive_HVAC_control extends IPSModule
             $this->SetStatus(102);
             return;
         }
-        
         $this->SetStatus(102);
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
@@ -103,40 +94,32 @@ class adaptive_HVAC_control extends IPSModule
         $prevTs = $meta['ts'] ?? null;
         $prev_WAD = $meta['WAD'] ?? 0;
         $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
-        
         $coilState = max($coilTemp, $minCoil + $hysteresis);
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
         list($prevP, $prevF) = explode(':', $prevAction);
         $r_energy = -0.01 * (intval($prevP) + intval($prevF));
         $r_overcool = -$rawD_cold * 5;
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
-        
         $this->SendDebug('REWARD', sprintf('Total: %.2f (Progress: %.2f, Freeze: %.2f, Energy: %.2f, Overcool: %.2f)', $r_total, $r_progress * 10, $r_freeze, $r_energy, $r_overcool), 0);
-
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
             $this->updateQ($Q, $state, $prevState, $prevAction, $r_total, $dt);
         }
-
         $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
         list($P, $F) = explode(':', $action);
         RequestAction($this->ReadPropertyInteger('PowerOutputLink'), intval($P));
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
-        
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
         $this->WriteAttributeString('QTable', json_encode($Q));
         $this->WriteAttributeString('MetaData', json_encode($newMeta));
-        
         if ($action !== '0:0') {
             $this->decayEpsilon();
         }
-        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
         $this->SendDebug('RESULT', "Chosen Action: P=$P F=$F based on State: $state", 0);
@@ -158,16 +141,13 @@ class adaptive_HVAC_control extends IPSModule
         echo "Visualization Updated!";
     }
 
-    private function GenerateQTableHTML(): string
-    {
+    private function GenerateQTableHTML(): string {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
         if (empty($qTable)) {
             return '<p>Q-Table is empty. Run the learning process to populate it.</p>';
         }
-
         ksort($qTable);
         $actions = $this->getActionPairs();
-
         $html = '<!DOCTYPE html><html><head><style>';
         $html .= 'body { font-family: sans-serif; font-size: 14px; } table { border-collapse: collapse; width: 100%; margin-top: 20px; }';
         $html .= 'th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }';
@@ -189,12 +169,10 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '<ul><li><b>d:</b> Demand Bin (0=cool, 5=very hot)</li><li><b>c:</b> Coil Safety Bin (0=near min, 5=very safe)</li><li><b>o:</b> Overcool Bin (0=none, 3=very overcooled)</li><li><b>t:</b> Coil Trend Bin (-1=cooling, 0=stable, 1=warming)</li><li><b>r:</b> Room Count Bin (number of rooms demanding cooling)</li></ul>';
         $html .= '</div></div>';
         $html .= '<table><thead><tr><th class="state-col">State</th>';
-
         foreach ($actions as $action) {
             $html .= "<th>{$action}</th>";
         }
         $html .= '</tr></thead><tbody>';
-
         $minQ = 0; $maxQ = 0;
         foreach ($qTable as $stateActions) {
             foreach ($stateActions as $qValue) {
@@ -204,7 +182,6 @@ class adaptive_HVAC_control extends IPSModule
                 }
             }
         }
-        
         foreach ($qTable as $state => $stateActions) {
             $html .= "<tr><td class='state-col'>{$state}</td>";
             foreach ($actions as $action) {
@@ -214,16 +191,13 @@ class adaptive_HVAC_control extends IPSModule
             }
             $html .= '</tr>';
         }
-
         $html .= '</tbody></table></body></html>';
         return $html;
     }
 
-    private function getColorForValue(float $value, float $min, float $max): string
-    {
+    private function getColorForValue(float $value, float $min, float $max): string {
         if ($value == self::OPTIMISTIC_INIT) return '#f0f0f0';
         if ($max == $min) return '#ffffff';
-
         if ($value >= 0) {
             $percent = ($max > 0) ? ($value / $max) : 0;
             $g = 255;
@@ -276,7 +250,20 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     private function getActionPairs(): array {
-        return ["0:0", "30:30", "30:50", "30:70", "60:40", "60:60", "60:80", "80:70", "80:90", "100:80", "100:100"];
+        $powerStep = $this->ReadPropertyInteger('PowerStep');
+        $fanStep = $this->ReadPropertyInteger('FanStep');
+        if ($powerStep < 10) $powerStep = 10;
+        if ($fanStep < 10) $fanStep = 10;
+        $actions = ['0:0'];
+        for ($p = $powerStep; $p <= 100; $p += $powerStep) {
+            for ($f = $fanStep; $f <= 100; $f += $fanStep) {
+                $actions[] = "{$p}:{$f}";
+            }
+        }
+        if (!in_array("100:100", $actions)) {
+            $actions[] = "100:100";
+        }
+        return array_unique($actions);
     }
 
     private function getAvailableActions(string $lastAction): array {

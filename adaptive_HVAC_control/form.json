@@ -25,10 +25,10 @@
             ]
         },
         { "type": "Label", "label": " " },
-        { "type": "Label", "label": "--- Settings ---" },
+        { "type": "Label", "label": "--- Settings & Diagnostics ---" },
         { 
             "type": "ExpansionPanel", 
-            "caption": "Advanced Settings", 
+            "caption": "Advanced Settings & Diagnostics", 
             "items": [
                 { "type": "CheckBox", "name": "ManualOverride", "caption": "Manual Override" },
                 { "type": "Select", "name": "LogLevel", "caption": "Log Level", "options": [{"label":"Off","value":0},{"label":"Error","value":1},{"label":"Warning","value":2},{"label":"Info","value":3},{"label":"Debug","value":4}], "defaultValue": 3},
@@ -39,6 +39,9 @@
                 { "type": "NumberSpinner", "name": "DecayRate", "caption": "Decay Rate", "suffix": "", "digits": 4, "defaultValue": 0.005 },
                 { "type": "Label", "label": " " },
                 { "type": "Label", "label": "System Settings:" },
+                { "type": "NumberSpinner", "name": "PowerStep", "caption": "Power Step Size", "suffix": "%", "defaultValue": 20 },
+                { "type": "NumberSpinner", "name": "FanStep", "caption": "Fan Step Size", "suffix": "%", "defaultValue": 20 },
+                { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Timer Interval (seconds)", "suffix": "s", "defaultValue": 120 },
                 { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (Global)", "suffix": "°", "digits": 1, "defaultValue": 0.5 },
                 { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Change per Step", "suffix": "%", "defaultValue": 40 },
                 { "type": "NumberSpinner", "name": "MaxFanDelta", "caption": "Max Fan Change per Step", "suffix": "%", "defaultValue": 40 }
