@@ -49,8 +49,6 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
-        $this->Log('DEBUG', 'ProcessCoolingLogic timer called.');
-
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
             $this->Log('INFO', 'Exiting due to Manual Override.');
@@ -69,7 +67,6 @@ class adaptive_HVAC_control extends IPSModule
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             return;
         }
-        
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
         $isCoolingNeeded = false;
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
@@ -93,11 +90,10 @@ class adaptive_HVAC_control extends IPSModule
             $this->SetStatus(102);
             return;
         }
-        
         $this->SetStatus(102);
-        $this->Log('DEBUG', 'Checks passed. AC is active and cooling is needed. Proceeding with logic.');
-        
+        $this->Log('DEBUG', 'Checks passed. Proceeding with logic.');
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
+        if (!is_array($Q)) { $Q = []; } // Ensure Q is an array
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
         $coilTemp = GetValue($this->ReadPropertyInteger('CoilTempLink'));
@@ -110,38 +106,31 @@ class adaptive_HVAC_control extends IPSModule
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-        $this->Log('DEBUG', sprintf('State String: %s (dBin:%d, cBin:%d, oBin:%d, trend:%d, rooms:%d)', $state, $dBin, $cBin, $oBin, $coilTrendBin, $hotRoomCountBin));
-        
+        $this->Log('DEBUG', sprintf('State String: %s', $state));
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
         list($prevP, $prevF) = explode(':', $prevAction);
         $r_energy = -0.01 * (intval($prevP) + intval($prevF));
         $r_overcool = -$rawD_cold * 5;
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
-        $this->Log('DEBUG', sprintf('Reward: %.2f (Progress: %.2f, Freeze: %.2f, Energy: %.2f, Overcool: %.2f)', $r_total, $r_progress * 10, $r_freeze, $r_energy, $r_overcool));
-        
+        $this->Log('DEBUG', sprintf('Reward: %.2f', $r_total));
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
             $this->updateQ($Q, $state, $prevState, $prevAction, $r_total, $dt);
         }
-        
         $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
         list($P, $F) = explode(':', $action);
         RequestAction($this->ReadPropertyInteger('PowerOutputLink'), intval($P));
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
-        
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
         $this->WriteAttributeString('QTable', json_encode($Q));
         $this->WriteAttributeString('MetaData', json_encode($newMeta));
-        
         if ($action !== '0:0') {
             $this->decayEpsilon();
         }
-        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
-        $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
-        
+        $this->SetValue("QTableJSON", json_encode($Q, JSON_PRETTY_PRINT));
         $this->Log('INFO', "State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")");
     }
 
@@ -169,15 +158,16 @@ class adaptive_HVAC_control extends IPSModule
         $logLevel = $this->ReadPropertyInteger('LogLevel');
         $levelMap = ['ERROR' => 1, 'WARNING' => 2, 'INFO' => 3, 'DEBUG' => 4];
         $messageLevel = $levelMap[strtoupper($level)] ?? 4;
-
         if ($logLevel >= $messageLevel) {
             $this->SendDebug(strtoupper($level), $message, 0);
         }
     }
 
     private function GenerateQTableHTML(): string {
-        $qTable = json_decode($this->ReadAttributeString('QTable'), true);
-        if (empty($qTable)) {
+        $qTableJson = $this->ReadAttributeString('QTable');
+        $qTable = json_decode($qTableJson, true);
+        if (!is_array($qTable) || empty($qTable)) {
+            $this->Log('DEBUG', 'GenerateQTableHTML: Q-Table is empty or invalid. JSON was: ' . $qTableJson);
             return '<p>Q-Table is empty. Run the learning process to populate it.</p>';
         }
         ksort($qTable);
@@ -193,14 +183,14 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '</style></head><body>';
         $html .= '<h3>Q-Table Visualization Legend</h3>';
         $html .= '<div class="legend">';
-        $html .= '<div><b>Rows (Y-Axis):</b> Represent the "State" of the system, which is what the agent currently observes.</div>';
-        $html .= '<div><b>Columns (X-Axis):</b> Represent the possible "Actions" (Power:Fan) the agent can take.</div>';
-        $html .= '<div style="margin-top: 10px;"><b>Cell Colors:</b> The agent\'s learned "Quality" (Q-Value) for taking a specific action in a specific state.</div>';
-        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #90ee90;"></span>Bright Green = Highly Positive (Good Action)</div>';
-        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #ffcccb;"></span>Bright Red = Highly Negative (Bad Action)</div>';
-        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #f0f0f0;"></span>Grey = Unexplored Action</div>';
+        $html .= '<div><b>Rows (Y-Axis):</b> Represent the "State" of the system.</div>';
+        $html .= '<div><b>Columns (X-Axis):</b> Represent the possible "Actions" (Power:Fan).</div>';
+        $html .= '<div style="margin-top: 10px;"><b>Cell Colors:</b> The learned "Quality" (Q-Value) for taking an action in a state.</div>';
+        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #90ee90;"></span>Green = Good Action</div>';
+        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #ffcccb;"></span>Red = Bad Action</div>';
+        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #f0f0f0;"></span>Grey = Unexplored</div>';
         $html .= '<div style="margin-top: 10px;"><b>State Format: (d|c|o|t|r)</b>';
-        $html .= '<ul><li><b>d:</b> Demand Bin (0=cool, 5=very hot)</li><li><b>c:</b> Coil Safety Bin (0=near min, 5=very safe)</li><li><b>o:</b> Overcool Bin (0=none, 3=very overcooled)</li><li><b>t:</b> Coil Trend Bin (-1=cooling, 0=stable, 1=warming)</li><li><b>r:</b> Room Count Bin (number of rooms demanding cooling)</li></ul>';
+        $html .= '<ul><li><b>d:</b> Demand</li><li><b>c:</b> Coil Safety</li><li><b>o:</b> Overcool</li><li><b>t:</b> Coil Trend</li><li><b>r:</b> Room Count</li></ul>';
         $html .= '</div></div>';
         $html .= '<table><thead><tr><th class="state-col">State</th>';
         foreach ($actions as $action) {
