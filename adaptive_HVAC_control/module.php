@@ -49,11 +49,10 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
-        $this->LogMessage('Timer called, starting logic.', KL_MESSAGE);
-
+        $this->LogMessage('Timer called, starting logic.', KL_DEBUG);
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
-            $this->LogMessage('Exiting due to Manual Override.', KL_MESSAGE);
+            $this->LogMessage('Exiting due to Manual Override.', KL_INFO);
             return;
         }
         $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
@@ -64,12 +63,11 @@ class adaptive_HVAC_control extends IPSModule
         }
         if (!GetValue($acActiveID)) {
             $this->SetStatus(201);
-            $this->LogMessage('Exiting: AC system is not active (linked variable is false).', KL_MESSAGE);
+            $this->LogMessage('Exiting: AC system is not active (linked variable is false).', KL_INFO);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             return;
         }
-        
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
         $isCoolingNeeded = false;
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
@@ -79,7 +77,9 @@ class adaptive_HVAC_control extends IPSModule
             $demandID = $room['demandID'] ?? 0;
             $threshold = $room['threshold'] ?? $hysteresis;
             if ($tempID > 0 && IPS_ObjectExists($tempID) && $targetID > 0 && IPS_ObjectExists($targetID)) {
-                if ($demandID > 0 && IPS_ObjectExists($demandID) && GetValue($demandID) == 1) { continue; }
+                if ($demandID > 0 && IPS_ObjectExists($demandID) && !in_array(GetValue($demandID), [1, 2])) {
+                    continue; 
+                }
                 if (GetValue($tempID) > (GetValue($targetID) + $threshold)) {
                     $isCoolingNeeded = true;
                     break;
@@ -87,16 +87,14 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
         if (!$isCoolingNeeded) {
-            $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
+            $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_INFO);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             $this->SetStatus(102);
             return;
         }
-        
         $this->SetStatus(102);
-        $this->LogMessage('Checks passed. AC is active and cooling is needed. Proceeding with logic.', KL_MESSAGE);
-        
+        $this->LogMessage('Checks passed. AC is active and cooling is needed. Proceeding with logic.', KL_DEBUG);
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($Q)) { $Q = []; }
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
@@ -111,39 +109,32 @@ class adaptive_HVAC_control extends IPSModule
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-        $this->LogMessage(sprintf('State String: %s', $state), KL_MESSAGE);
-        
+        $this->LogMessage(sprintf('State String: %s', $state), KL_DEBUG);
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
         list($prevP, $prevF) = explode(':', $prevAction);
         $r_energy = -0.01 * (intval($prevP) + intval($prevF));
         $r_overcool = -$rawD_cold * 5;
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
-        $this->LogMessage(sprintf('Reward: %.2f (Progress: %.2f, Freeze: %.2f, Energy: %.2f, Overcool: %.2f)', $r_total, $r_progress * 10, $r_freeze, $r_energy, $r_overcool), KL_MESSAGE);
-        
+        $this->LogMessage(sprintf('Reward: %.2f', $r_total), KL_DEBUG);
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
             $this->updateQ($Q, $state, $prevState, $prevAction, $r_total, $dt);
         }
-        
         $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
         list($P, $F) = explode(':', $action);
         RequestAction($this->ReadPropertyInteger('PowerOutputLink'), intval($P));
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
-        
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
         $this->WriteAttributeString('QTable', json_encode($Q));
         $this->WriteAttributeString('MetaData', json_encode($newMeta));
-        
         if ($action !== '0:0') {
             $this->decayEpsilon();
         }
-        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode($Q, JSON_PRETTY_PRINT));
-        
-        $this->LogMessage("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_MESSAGE);
+        $this->LogMessage("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_INFO);
     }
 
     public function ResetLearning() {
@@ -153,7 +144,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("CurrentEpsilon", 0.4);
         $this->SetValue("QTableJSON", '{}');
         $this->UpdateVisualization();
-        $this->LogMessage('Learning has been reset by the user.', KL_MESSAGE);
+        $this->LogMessage('Learning has been reset by the user.', KL_INFO);
         if ($_IPS['SENDER'] == 'WebFront') {
             echo "Learning has been reset!";
         }
@@ -169,7 +160,6 @@ class adaptive_HVAC_control extends IPSModule
     private function GenerateQTableHTML(): string {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($qTable) || empty($qTable)) {
-            $this->LogMessage('GenerateQTableHTML: Q-Table is empty or invalid.', KL_DEBUG);
             return '<p>Q-Table is empty. Run the learning process to populate it.</p>';
         }
         ksort($qTable);
@@ -257,7 +247,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         $availableActions = $this->getAvailableActions($lastAction);
         if ((mt_rand() / mt_getrandmax()) < $epsilon) {
-            $this->LogMessage('Exploring with random action.', KL_MESSAGE);
+            $this->LogMessage('Exploring with random action.', KL_DEBUG);
             return $availableActions[array_rand($availableActions)];
         }
         $qValuesForAvailable = array_intersect_key($Q[$state], array_flip($availableActions));
@@ -265,7 +255,7 @@ class adaptive_HVAC_control extends IPSModule
         $maxV = max($qValuesForAvailable);
         $bestActions = array_keys($qValuesForAvailable, $maxV);
         $chosenAction = $bestActions[array_rand($bestActions)];
-        $this->LogMessage(sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), KL_MESSAGE);
+        $this->LogMessage(sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), KL_DEBUG);
         return $chosenAction;
     }
 
@@ -306,6 +296,7 @@ class adaptive_HVAC_control extends IPSModule
         return $available;
     }
     
+    // --- MODIFIED FUNCTION ---
     private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
         $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
         foreach ($monitoredRooms as $room) {
@@ -314,10 +305,15 @@ class adaptive_HVAC_control extends IPSModule
             $demandID = $room['demandID'] ?? 0;
             $roomSize = $room['size'] ?? 1;
             $threshold = $room['threshold'] ?? $this->ReadPropertyFloat('Hysteresis');
+
             if ($tempID > 0 && IPS_ObjectExists($tempID) && $targetID > 0 && IPS_ObjectExists($targetID)) {
-                if ($demandID > 0 && IPS_ObjectExists($demandID) && GetValue($demandID) == 1) {
+                
+                // --- NEW DEMAND LOGIC ---
+                // If a demand variable is linked, check if its value is 1 or 2. If not, skip the room.
+                if ($demandID > 0 && IPS_ObjectExists($demandID) && !in_array(GetValue($demandID), [1, 2])) {
                     continue; 
                 }
+
                 $temp = GetValue($tempID);
                 $target = GetValue($targetID);
                 $deviation = $temp - $target;
