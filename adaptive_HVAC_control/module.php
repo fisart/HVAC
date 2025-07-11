@@ -7,7 +7,6 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
-        // Register User-Configurable Properties
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -25,17 +24,12 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('TimerInterval', 120);
         $this->RegisterPropertyInteger('PowerStep', 20);
         $this->RegisterPropertyInteger('FanStep', 20);
-
-        // Register Internal Attributes
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
-        
-        // Register Status Variables for display
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
         $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
-
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
@@ -43,11 +37,9 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::ApplyChanges();
         $this->SetTimerInterval('ProcessCoolingLogic', $this->ReadPropertyInteger('TimerInterval') * 1000);
-        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
         $this->UpdateVisualization();
-
         if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
             $this->SetStatus(104);
         } else {
@@ -57,18 +49,32 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
+        $this->SendDebug('START', 'ProcessCoolingLogic timer called.', 0);
+
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
-            $this->SendDebug('INFO', 'Exiting due to Manual Override.', 0);
+            $this->SendDebug('EXIT', 'Exiting: Manual Override is active.', 0);
             return;
         }
-        if (!GetValue($this->ReadPropertyInteger('ACActiveLink'))) {
+
+        $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
+        if ($acActiveID === 0) {
+            $this->SetStatus(104);
+            $this->SendDebug('EXIT', 'Exiting: AC Active Link is not configured.', 0);
+            return;
+        }
+
+        if (!GetValue($acActiveID)) {
             $this->SetStatus(201);
-            $this->SendDebug('INFO', 'Exiting because AC system is not active.', 0);
+            $this->SendDebug('EXIT', 'Exiting: AC system is not active (linked variable is false).', 0);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             return;
         }
+        
+        $this->SetStatus(102);
+        $this->SendDebug('CHECKS_PASSED', 'AC is active and not in manual override. Proceeding with logic.', 0);
+
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
         $isCoolingNeeded = false;
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
@@ -89,10 +95,9 @@ class adaptive_HVAC_control extends IPSModule
             $this->SendDebug('IDLE', 'No rooms require cooling. Setting output to 0 and exiting.', 0);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
-            $this->SetStatus(102);
             return;
         }
-        $this->SetStatus(102);
+        
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
@@ -106,6 +111,9 @@ class adaptive_HVAC_control extends IPSModule
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
+        $this->SendDebug('STATE', sprintf('State String: %s (dBin:%d, cBin:%d, oBin:%d, trend:%d, rooms:%d)', $state, $dBin, $cBin, $oBin, $coilTrendBin, $hotRoomCountBin), 0);
+        $this->SendDebug('STATE_RAW', sprintf('Raw WAD: %.2f, Raw Overcool: %.2f', $rawWAD, $rawD_cold), 0);
+        
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
         list($prevP, $prevF) = explode(':', $prevAction);
@@ -113,21 +121,26 @@ class adaptive_HVAC_control extends IPSModule
         $r_overcool = -$rawD_cold * 5;
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
         $this->SendDebug('REWARD', sprintf('Total: %.2f (Progress: %.2f, Freeze: %.2f, Energy: %.2f, Overcool: %.2f)', $r_total, $r_progress * 10, $r_freeze, $r_energy, $r_overcool), 0);
+        
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
             $this->updateQ($Q, $state, $prevState, $prevAction, $r_total, $dt);
         }
+        
         $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
         list($P, $F) = explode(':', $action);
         RequestAction($this->ReadPropertyInteger('PowerOutputLink'), intval($P));
         RequestAction($this->ReadPropertyInteger('FanOutputLink'), intval($F));
+        
         $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
         $this->WriteAttributeString('QTable', json_encode($Q));
         $this->WriteAttributeString('MetaData', json_encode($newMeta));
+        
         if ($action !== '0:0') {
             $this->decayEpsilon();
         }
+        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
         $this->SendDebug('RESULT', "Chosen Action: P=$P F=$F based on State: $state", 0);
