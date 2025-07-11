@@ -9,7 +9,8 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
-        $this->RegisterPropertyInteger('LogLevel', 3);
+        // Register User-Configurable Properties
+        // LogLevel is removed as we will use KL_MESSAGE for standard logging
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
         $this->RegisterPropertyFloat('Gamma', 0.9);
@@ -26,12 +27,17 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('TimerInterval', 120);
         $this->RegisterPropertyInteger('PowerStep', 20);
         $this->RegisterPropertyInteger('FanStep', 20);
+
+        // Register Internal Attributes
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
+        
+        // Register Status Variables for display
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
         $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
+
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
@@ -51,10 +57,10 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
-        $this->LogMessage('Timer called, starting logic.', KL_DEBUG);
+        $this->LogMessage('Timer called, starting logic.', KL_MESSAGE);
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
-            $this->LogMessage('Exiting due to Manual Override.', KL_INFO);
+            $this->LogMessage('Exiting due to Manual Override.', KL_MESSAGE);
             return;
         }
         $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
@@ -65,7 +71,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         if (!GetValue($acActiveID)) {
             $this->SetStatus(201);
-            $this->LogMessage('Exiting: AC system is not active (linked variable is false).', KL_INFO);
+            $this->LogMessage('Exiting: AC system is not active.', KL_MESSAGE);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             return;
@@ -89,14 +95,14 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
         if (!$isCoolingNeeded) {
-            $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_INFO);
+            $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             $this->SetStatus(102);
             return;
         }
         $this->SetStatus(102);
-        $this->LogMessage('Checks passed. AC is active and cooling is needed. Proceeding with logic.', KL_DEBUG);
+        $this->LogMessage('Checks passed. Proceeding with logic.', KL_MESSAGE);
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($Q)) { $Q = []; }
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
@@ -111,14 +117,12 @@ class adaptive_HVAC_control extends IPSModule
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-        $this->LogMessage(sprintf('State String: %s', $state), KL_DEBUG);
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
         list($prevP, $prevF) = explode(':', $prevAction);
         $r_energy = -0.01 * (intval($prevP) + intval($prevF));
         $r_overcool = -$rawD_cold * 5;
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
-        $this->LogMessage(sprintf('Reward: %.2f', $r_total), KL_DEBUG);
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
@@ -137,7 +141,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode($Q, JSON_PRETTY_PRINT));
         $this->UpdateVisualization();
-        $this->LogMessage("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_INFO);
+        $this->LogMessage("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_MESSAGE);
     }
 
     public function ResetLearning() {
@@ -147,7 +151,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("CurrentEpsilon", 0.4);
         $this->SetValue("QTableJSON", '{}');
         $this->UpdateVisualization();
-        $this->LogMessage('Learning has been reset by the user.', KL_INFO);
+        $this->LogMessage('Learning has been reset by the user.', KL_MESSAGE);
         if ($_IPS['SENDER'] == 'WebFront') {
             echo "Learning has been reset!";
         }
@@ -160,10 +164,14 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
 
-    // --- MODIFIED FUNCTION ---
     private function GenerateQTableHTML(): string {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
-        
+        if (!is_array($qTable) || empty($qTable)) {
+            $this->LogMessage('GenerateQTableHTML: Q-Table is empty.', KL_MESSAGE);
+            return '<p>Q-Table is empty. Run the learning process to populate it.</p>';
+        }
+        ksort($qTable);
+        $actions = $this->getActionPairs();
         $html = '<!DOCTYPE html><html><head><style>';
         $html .= 'body { font-family: sans-serif; font-size: 14px; } table { border-collapse: collapse; width: 100%; margin-top: 20px; }';
         $html .= 'th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }';
@@ -172,40 +180,23 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '.legend { border: 1px solid #ccc; padding: 10px; margin-bottom: 20px; background-color: #f9f9f9; }';
         $html .= '.legend-item { display: inline-block; margin-right: 20px; }';
         $html .= '.color-box { width: 15px; height: 15px; border: 1px solid #666; display: inline-block; vertical-align: middle; margin-right: 5px; }';
-        $html .= 'ul { margin: 5px 0; padding-left: 20px; } li { margin-bottom: 3px; }';
         $html .= '</style></head><body>';
-        
         $html .= '<h3>Q-Table Visualization Legend</h3>';
         $html .= '<div class="legend">';
         $html .= '<div><b>Rows (Y-Axis):</b> Represent the "State" of the system.</div>';
-        $html .= '<div><b>Columns (X-Axis):</b> Represent the possible "Actions" (Power:Fan) the agent can take.</div>';
-        $html .= '<div style="margin-top: 10px;"><b>Cell Colors:</b> The agent\'s learned "Quality" (Q-Value) for taking an action in a state.</div>';
-        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #90ee90;"></span>Bright Green = Highly Positive (Good Action)</div>';
-        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #ffcccb;"></span>Bright Red = Highly Negative (Bad Action)</div>';
+        $html .= '<div><b>Columns (X-Axis):</b> Represent the possible "Actions" (Power:Fan).</div>';
+        $html .= '<div style="margin-top: 10px;"><b>Cell Colors:</b> The learned "Quality" (Q-Value) for taking an action in a state.</div>';
+        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #90ee90;"></span>Green = Good Action</div>';
+        $html .= '<div class="legend-item"><span class="color-box" style="background-color: #ffcccb;"></span>Red = Bad Action</div>';
         $html .= '<div class="legend-item"><span class="color-box" style="background-color: #f0f0f0;"></span>Grey = Unexplored</div>';
-        $html .= '<div style="margin-top: 10px;"><b>State Format: (d | c | o | t | r)</b>';
-        $html .= '<ul>';
-        $html .= '<li><b>d - Demand Bin:</b> How hot is the HOTTEST room? (0=at target, 5=very hot)</li>';
-        $html .= '<li><b>c - Coil Safety Bin:</b> How close is the coil to freezing? (-2=danger, 5=very safe)</li>';
-        $html .= '<li><b>o - Overcool Bin:</b> Is any room getting TOO cold? (0=none, 3=very overcooled)</li>';
-        $html .= '<li><b>t - Coil Trend Bin:</b> Is the AC actively cooling? (-1=cooling, 0=stable, 1=warming)</li>';
-        $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-3+)</li>';
-        $html .= '</ul></div></div>';
-
-        if (!is_array($qTable) || empty($qTable)) {
-            $html .= '<p>Q-Table is empty. Run the learning process to populate it.</p></body></html>';
-            return $html;
-        }
-
-        ksort($qTable);
-        $actions = $this->getActionPairs();
-        
+        $html .= '<div style="margin-top: 10px;"><b>State Format: (d|c|o|t|r)</b>';
+        $html .= '<ul><li><b>d:</b> Demand</li><li><b>c:</b> Coil Safety</li><li><b>o:</b> Overcool</li><li><b>t:</b> Coil Trend</li><li><b>r:</b> Room Count</li></ul>';
+        $html .= '</div></div>';
         $html .= '<table><thead><tr><th class="state-col">State</th>';
         foreach ($actions as $action) {
             $html .= "<th>{$action}</th>";
         }
         $html .= '</tr></thead><tbody>';
-        
         $minQ = 0; $maxQ = 0;
         foreach ($qTable as $stateActions) {
             foreach ($stateActions as $qValue) {
@@ -215,7 +206,6 @@ class adaptive_HVAC_control extends IPSModule
                 }
             }
         }
-        
         foreach ($qTable as $state => $stateActions) {
             $html .= "<tr><td class='state-col'>{$state}</td>";
             foreach ($actions as $action) {
@@ -225,7 +215,6 @@ class adaptive_HVAC_control extends IPSModule
             }
             $html .= '</tr>';
         }
-        
         $html .= '</tbody></table></body></html>';
         return $html;
     }
@@ -266,7 +255,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         $availableActions = $this->getAvailableActions($lastAction);
         if ((mt_rand() / mt_getrandmax()) < $epsilon) {
-            $this->LogMessage('Exploring with random action.', KL_DEBUG);
+            $this->LogMessage('Exploring with random action.', KL_MESSAGE);
             return $availableActions[array_rand($availableActions)];
         }
         $qValuesForAvailable = array_intersect_key($Q[$state], array_flip($availableActions));
@@ -274,7 +263,7 @@ class adaptive_HVAC_control extends IPSModule
         $maxV = max($qValuesForAvailable);
         $bestActions = array_keys($qValuesForAvailable, $maxV);
         $chosenAction = $bestActions[array_rand($bestActions)];
-        $this->LogMessage(sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), KL_DEBUG);
+        $this->LogMessage(sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), KL_MESSAGE);
         return $chosenAction;
     }
 
@@ -316,12 +305,7 @@ class adaptive_HVAC_control extends IPSModule
     }
     
     private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
-        $weightedDeviationSum = 0.0;
-        $totalSizeOfHotRooms = 0.0;
-        $D_cold = 0.0;
-        $hotRoomCount = 0;
-        $maxDeviation = 0.0;
-
+        $weightedDeviationSum = 0.0; $totalSizeOfHotRooms = 0.0; $D_cold = 0.0; $hotRoomCount = 0;
         foreach ($monitoredRooms as $room) {
             $tempID = $room['tempID'] ?? 0;
             $targetID = $room['targetID'] ?? 0;
@@ -335,7 +319,6 @@ class adaptive_HVAC_control extends IPSModule
                 $temp = GetValue($tempID);
                 $target = GetValue($targetID);
                 $deviation = $temp - $target;
-                $maxDeviation = max($maxDeviation, $deviation);
                 $D_cold = max(0, -$deviation);
                 if ($deviation > $threshold) {
                     $hotRoomCount++;
@@ -345,7 +328,7 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
         $rawWAD = ($totalSizeOfHotRooms > 0) ? ($weightedDeviationSum / $totalSizeOfHotRooms) : 0.0;
-        $dBin = min(5, (int)floor($maxDeviation));
+        $dBin = min(5, (int)floor($rawWAD));
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
         $oBin = min(3, (int)floor($D_cold));
         $hotRoomCountBin = min(3, $hotRoomCount);
