@@ -7,7 +7,6 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
-        // LogLevel is no longer needed as we use KL_MESSAGE for all logs
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
         $this->RegisterPropertyFloat('Gamma', 0.9);
@@ -73,12 +72,12 @@ class adaptive_HVAC_control extends IPSModule
         $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
         if ($acActiveID === 0) {
             $this->SetStatus(104);
-            $this->LogMessage('Exiting: AC Active Link is not configured.', KL_MESSAGE);
+            $this->LogMessage('Exiting: AC Active Link is not configured.', KL_ERROR);
             return;
         }
         if (!GetValue($acActiveID)) {
             $this->SetStatus(201);
-            $this->LogMessage('Exiting: AC system is not active.', KL_MESSAGE);
+            $this->LogMessage('Exiting: AC system is not active (linked variable is false).', KL_MESSAGE);
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             return;
@@ -93,9 +92,12 @@ class adaptive_HVAC_control extends IPSModule
             $threshold = $room['threshold'] ?? $hysteresis;
             if ($tempID > 0 && IPS_ObjectExists($tempID) && $targetID > 0 && IPS_ObjectExists($targetID)) {
                 $parentInstanceID = IPS_GetParent($tempID);
-                if (IPS_InstanceExists($parentInstanceID) && IPS_IsInstanceStale($parentInstanceID)) {
-                    $this->LogMessage('Skipping room ' . IPS_GetName($tempID) . ' because its parent instance is stale.', KL_MESSAGE);
-                    continue;
+                if (IPS_InstanceExists($parentInstanceID)) {
+                    $instance = IPS_GetInstance($parentInstanceID);
+                    if ($instance['InstanceStatus'] !== IS_ACTIVE) {
+                        $this->LogMessage('Skipping room ' . IPS_GetName($tempID) . ' because its parent instance is not active (Status: ' . $instance['InstanceStatus'] . ').', KL_MESSAGE);
+                        continue;
+                    }
                 }
                 if ($demandID > 0 && IPS_ObjectExists($demandID) && !in_array((int)GetValue($demandID), [1, 2])) {
                     continue; 
@@ -114,7 +116,7 @@ class adaptive_HVAC_control extends IPSModule
             return;
         }
         $this->SetStatus(102);
-        $this->LogMessage('Checks passed. Proceeding with logic.', KL_MESSAGE);
+        $this->LogMessage('Checks passed. AC is active and cooling is needed. Proceeding with logic.', KL_MESSAGE);
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($Q)) { $Q = []; }
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
