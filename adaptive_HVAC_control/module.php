@@ -7,6 +7,7 @@ class adaptive_HVAC_control extends IPSModule
     public function Create()
     {
         parent::Create();
+        // Register User-Configurable Properties
         $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyFloat('Alpha', 0.05);
@@ -24,12 +25,17 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('TimerInterval', 120);
         $this->RegisterPropertyInteger('PowerStep', 20);
         $this->RegisterPropertyInteger('FanStep', 20);
+
+        // Register Internal Attributes
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
+        
+        // Register Status Variables for display
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
         $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
+
         $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
     }
 
@@ -37,9 +43,11 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::ApplyChanges();
         $this->SetTimerInterval('ProcessCoolingLogic', $this->ReadPropertyInteger('TimerInterval') * 1000);
+        
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
         $this->UpdateVisualization();
+
         if ($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) {
             $this->SetStatus(104);
         } else {
@@ -133,12 +141,16 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("QTableJSON", '{}');
         $this->UpdateVisualization();
         $this->SendDebug('RESET', 'Learning has been reset by the user.', 0);
-        echo "Learning has been reset!";
+        if ($_IPS['SENDER'] == 'WebFront') {
+            echo "Learning has been reset!";
+        }
     }
 
     public function UpdateVisualization() {
         $this->SetValue("QTableHTML", $this->GenerateQTableHTML());
-        echo "Visualization Updated!";
+        if ($_IPS['SENDER'] == 'WebFront') {
+            echo "Visualization Updated!";
+        }
     }
 
     private function GenerateQTableHTML(): string {
