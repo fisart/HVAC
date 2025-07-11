@@ -49,32 +49,27 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
-        $this->SendDebug('START', 'ProcessCoolingLogic timer called.', 0);
+        $this->Log('DEBUG', 'ProcessCoolingLogic timer called.');
 
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
-            $this->SendDebug('EXIT', 'Exiting: Manual Override is active.', 0);
+            $this->Log('INFO', 'Exiting due to Manual Override.');
             return;
         }
-
         $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
         if ($acActiveID === 0) {
             $this->SetStatus(104);
-            $this->SendDebug('EXIT', 'Exiting: AC Active Link is not configured.', 0);
+            $this->Log('ERROR', 'Exiting: AC Active Link is not configured.');
             return;
         }
-
         if (!GetValue($acActiveID)) {
             $this->SetStatus(201);
-            $this->SendDebug('EXIT', 'Exiting: AC system is not active (linked variable is false).', 0);
+            $this->Log('INFO', 'Exiting: AC system is not active (linked variable is false).');
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
             return;
         }
         
-        $this->SetStatus(102);
-        $this->SendDebug('CHECKS_PASSED', 'AC is active and not in manual override. Proceeding with logic.', 0);
-
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
         $isCoolingNeeded = false;
         $hysteresis = $this->ReadPropertyFloat('Hysteresis');
@@ -92,11 +87,15 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
         if (!$isCoolingNeeded) {
-            $this->SendDebug('IDLE', 'No rooms require cooling. Setting output to 0 and exiting.', 0);
+            $this->Log('INFO', 'No rooms require cooling. Setting output to 0 and exiting.');
             RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
             RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
+            $this->SetStatus(102);
             return;
         }
+        
+        $this->SetStatus(102);
+        $this->Log('DEBUG', 'Checks passed. AC is active and cooling is needed. Proceeding with logic.');
         
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
@@ -111,8 +110,7 @@ class adaptive_HVAC_control extends IPSModule
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-        $this->SendDebug('STATE', sprintf('State String: %s (dBin:%d, cBin:%d, oBin:%d, trend:%d, rooms:%d)', $state, $dBin, $cBin, $oBin, $coilTrendBin, $hotRoomCountBin), 0);
-        $this->SendDebug('STATE_RAW', sprintf('Raw WAD: %.2f, Raw Overcool: %.2f', $rawWAD, $rawD_cold), 0);
+        $this->Log('DEBUG', sprintf('State String: %s (dBin:%d, cBin:%d, oBin:%d, trend:%d, rooms:%d)', $state, $dBin, $cBin, $oBin, $coilTrendBin, $hotRoomCountBin));
         
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
@@ -120,7 +118,7 @@ class adaptive_HVAC_control extends IPSModule
         $r_energy = -0.01 * (intval($prevP) + intval($prevF));
         $r_overcool = -$rawD_cold * 5;
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
-        $this->SendDebug('REWARD', sprintf('Total: %.2f (Progress: %.2f, Freeze: %.2f, Energy: %.2f, Overcool: %.2f)', $r_total, $r_progress * 10, $r_freeze, $r_energy, $r_overcool), 0);
+        $this->Log('DEBUG', sprintf('Reward: %.2f (Progress: %.2f, Freeze: %.2f, Energy: %.2f, Overcool: %.2f)', $r_total, $r_progress * 10, $r_freeze, $r_energy, $r_overcool));
         
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
@@ -143,7 +141,8 @@ class adaptive_HVAC_control extends IPSModule
         
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
-        $this->SendDebug('RESULT', "Chosen Action: P=$P F=$F based on State: $state", 0);
+        
+        $this->Log('INFO', "State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")");
     }
 
     public function ResetLearning() {
@@ -153,7 +152,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("CurrentEpsilon", 0.4);
         $this->SetValue("QTableJSON", '{}');
         $this->UpdateVisualization();
-        $this->SendDebug('RESET', 'Learning has been reset by the user.', 0);
+        $this->Log('INFO', 'Learning has been reset by the user.');
         if ($_IPS['SENDER'] == 'WebFront') {
             echo "Learning has been reset!";
         }
@@ -163,6 +162,16 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("QTableHTML", $this->GenerateQTableHTML());
         if ($_IPS['SENDER'] == 'WebFront') {
             echo "Visualization Updated!";
+        }
+    }
+
+    private function Log(string $level, string $message) {
+        $logLevel = $this->ReadPropertyInteger('LogLevel');
+        $levelMap = ['ERROR' => 1, 'WARNING' => 2, 'INFO' => 3, 'DEBUG' => 4];
+        $messageLevel = $levelMap[strtoupper($level)] ?? 4;
+
+        if ($logLevel >= $messageLevel) {
+            $this->SendDebug(strtoupper($level), $message, 0);
         }
     }
 
@@ -256,7 +265,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         $availableActions = $this->getAvailableActions($lastAction);
         if ((mt_rand() / mt_getrandmax()) < $epsilon) {
-            $this->SendDebug('CHOICE', 'Exploring with random action.', 0);
+            $this->Log('DEBUG', 'Exploring with random action.');
             return $availableActions[array_rand($availableActions)];
         }
         $qValuesForAvailable = array_intersect_key($Q[$state], array_flip($availableActions));
@@ -264,7 +273,7 @@ class adaptive_HVAC_control extends IPSModule
         $maxV = max($qValuesForAvailable);
         $bestActions = array_keys($qValuesForAvailable, $maxV);
         $chosenAction = $bestActions[array_rand($bestActions)];
-        $this->SendDebug('CHOICE', sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), 0);
+        $this->Log('DEBUG', sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV));
         return $chosenAction;
     }
 
