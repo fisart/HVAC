@@ -14,6 +14,8 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MasterBedSpecialModeLink', 0);
         $this->RegisterPropertyInteger('MainStatusTextLink', 0);
         $this->RegisterPropertyString('ControlledRooms', '[]');
+        
+        $this->RegisterTimer('ProcessZoning', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
@@ -48,50 +50,56 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("--- END Zoning & Demand Check ---", KL_MESSAGE);
     }
 
-    // --- MODIFIED FUNCTION WITH 3-MODE LOGIC ---
     private function ProcessRoom(array $roomConfig): bool
     {
         $roomName = $roomConfig['name'] ?? '';
         if (empty($roomName)) return false;
 
-        if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("Processing room: {$roomName}", KL_MESSAGE);
-        
-        $coolingMode = $this->GetCoolingModeForRoom($roomConfig);
-        $currentPhase = $this->GetCoolingPhaseInfo($roomConfig['coolingPhaseInfoID']);
+        // Ensure required IDs are set before proceeding
+        if (empty($roomConfig['tempID']) || empty($roomConfig['targetID'])) {
+            return false;
+        }
 
-        // Universal deactivation checks
+        if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("Processing room: {$roomName}", KL_MESSAGE);
+
         if ($this->IsWindowOpen($roomConfig)) {
             $this->LogMessage("{$roomName}: Window/Door is open. Deactivating room.", KL_MESSAGE);
-            $this->DeactivateRoom($roomConfig, 3); // Phase 3 = Window Open
-            return false;
-        }
-        if ($coolingMode === 'OFF') {
-            $this->LogMessage("{$roomName}: Mode is OFF. Deactivating room.", KL_MESSAGE);
-            $this->DeactivateRoom($roomConfig, 0); // Phase 0 = Off
+            $this->DeactivateRoom($roomConfig, 3);
             return false;
         }
 
-        // Mode-specific logic
-        if ($coolingMode === 'ON') { // One-shot cooling
-            // If it has already been cooled (phase is not 0), and is no longer too high, it stays off.
-            if ($currentPhase !== 0 && !$this->IsRoomTooHigh($roomConfig)) {
-                $this->LogMessage("{$roomName}: Mode is ON, but target already reached. Deactivating permanently for this cycle.", KL_MESSAGE);
-                $this->DeactivateRoom($roomConfig, $currentPhase); // Keep the phase to show it was completed
-                return false;
-            }
+        $coolingMode = $this->GetCoolingModeForRoom($roomConfig);
+        if ($coolingMode === 'OFF') {
+            $this->LogMessage("{$roomName}: Mode is OFF. Deactivating room.", KL_MESSAGE);
+            $this->DeactivateRoom($roomConfig, 0);
+            return false;
         }
         
-        // For both ON (first time) and AUTO, check if temp is too high
-        if ($this->IsRoomTooHigh($roomConfig)) {
-            $this->LogMessage("{$roomName}: Temperature is high, cooling is required.", KL_MESSAGE);
-            $phase = ($coolingMode === 'ON') ? 1 : 2; // Phase 1 for ON, 2 for AUTO
+        if ($this->IsRoomTooCold($roomConfig)) {
+             $this->LogMessage("{$roomName}: Temperature is too low. Deactivating room.", KL_MESSAGE);
+             $this->DeactivateRoom($roomConfig, 0);
+             return false;
+        }
+
+        $isDemanding = false;
+        if ($coolingMode === 'ON') {
+            $currentPhase = $this->GetCoolingPhaseInfo($roomConfig['coolingPhaseInfoID']);
+            if ($currentPhase == 0 && $this->IsRoomTooHigh($roomConfig)) {
+                $isDemanding = true;
+            }
+        } elseif ($coolingMode === 'AUTO' && $this->IsRoomTooHigh($roomConfig)) {
+            $isDemanding = true;
+        }
+
+        if ($isDemanding) {
+            $this->LogMessage("{$roomName}: Temperature is high and mode is {$coolingMode}. Cooling is required.", KL_MESSAGE);
+            $phase = ($coolingMode === 'ON') ? 1 : 2;
             $this->ActivateRoom($roomConfig, $phase);
             return true;
         }
-
-        // If we reach here, temp is not too high
+        
         $this->LogMessage("{$roomName}: Temperature is OK. Deactivating room.", KL_MESSAGE);
-        $this->DeactivateRoom($roomConfig, 0); // Reset phase to 0
+        $this->DeactivateRoom($roomConfig, 0);
         return false;
     }
 
@@ -109,30 +117,15 @@ class Zoning_and_Demand_Manager extends IPSModule
             default: return 'OFF';
         }
     }
-    
+
     private function GetCoolingPhaseInfo(int $phaseID): int
     {
         if ($phaseID > 0 && @IPS_VariableExists($phaseID)) {
             return @GetValueInteger($phaseID);
         }
-        return 0; // Default to 0 if not configured
+        return 0;
     }
 
-    private function IsSystemOverridden(): bool { /* ... unchanged ... */ }
-    private function IsWindowOpen(array $roomConfig): bool { /* ... unchanged ... */ }
-    private function IsRoomTooCold(array $roomConfig): bool { /* ... unchanged ... */ }
-    private function IsRoomTooHigh(array $roomConfig): bool { /* ... unchanged ... */ }
-    private function ActivateRoom(array $roomConfig, int $phaseInfo) { /* ... unchanged ... */ }
-    private function DeactivateRoom(array $roomConfig, int $phaseInfo) { /* ... unchanged ... */ }
-    private function SetFlapState(array $roomConfig, bool $shouldBeOpen) { /* ... unchanged ... */ }
-    private function SetDemandState(int $demandID, int $state) { /* ... unchanged ... */ }
-    private function SetCoolingPhaseInfo(int $phaseID, int $state) { /* ... unchanged ... */ }
-    private function ImplementFinalMeasures(bool $isAnyRoomDemandingCooling) { /* ... unchanged ... */ }
-    private function SwitchSystemOn() { /* ... unchanged ... */ }
-    private function SwitchSystemOff() { /* ... unchanged ... */ }
-    private function SwitchFan(bool $state) { /* ... unchanged ... */ }
-
-    // --- FULL, UNCHANGED HELPER FUNCTIONS FOR COMPLETENESS ---
     private function IsSystemOverridden(): bool {
         $heatingID = $this->ReadPropertyInteger('HeatingActiveLink');
         if ($heatingID > 0 && @GetValueBoolean($heatingID)) {
@@ -149,6 +142,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->SetStatus(102);
         return false;
     }
+
     private function IsWindowOpen(array $roomConfig): bool {
         $catID = $roomConfig['windowCatID'] ?? 0;
         if ($catID <= 0 || !@IPS_CategoryExists($catID)) return false;
@@ -159,28 +153,33 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
         return false;
     }
+
     private function IsRoomTooCold(array $roomConfig): bool {
         $temp = @GetValueFloat($roomConfig['tempID']);
         $target = @GetValueFloat($roomConfig['targetID']);
         $hysteresis = 0.5;
         return $temp <= ($target - $hysteresis);
     }
+    
     private function IsRoomTooHigh(array $roomConfig): bool {
         $temp = @GetValueFloat($roomConfig['tempID']);
         $target = @GetValueFloat($roomConfig['targetID']);
-        $hysteresis = 0.5;
+        $hysteresis = 0.5; // CORRECTED: Added missing semicolon
         return $temp > ($target + $hysteresis);
     }
+
     private function ActivateRoom(array $roomConfig, int $phaseInfo) {
         $this->SetFlapState($roomConfig, true);
         $this->SetDemandState($roomConfig['demandID'], 1);
         $this->SetCoolingPhaseInfo($roomConfig['coolingPhaseInfoID'], $phaseInfo);
     }
+
     private function DeactivateRoom(array $roomConfig, int $phaseInfo) {
         $this->SetFlapState($roomConfig, false);
         $this->SetDemandState($roomConfig['demandID'], 0);
         $this->SetCoolingPhaseInfo($roomConfig['coolingPhaseInfoID'], $phaseInfo);
     }
+
     private function SetFlapState(array $roomConfig, bool $shouldBeOpen) {
         $flapID = $roomConfig['flapID'] ?? 0;
         if ($flapID <= 0 || !@IPS_VariableExists($flapID)) return;
@@ -198,24 +197,27 @@ class Zoning_and_Demand_Manager extends IPSModule
             if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("Setting flap for '{$roomConfig['name']}' to " . ($shouldBeOpen ? "OPEN" : "CLOSED"), KL_MESSAGE);
         }
     }
+
     private function SetDemandState(int $demandID, int $state) {
         if ($demandID > 0 && @IPS_VariableExists($demandID)) {
             if(@GetValueInteger($demandID) != $state) SetValueInteger($demandID, $state);
         }
     }
+    
     private function SetCoolingPhaseInfo(int $phaseID, int $state) {
         if ($phaseID > 0 && @IPS_VariableExists($phaseID)) {
              if(@GetValueInteger($phaseID) != $state) SetValueInteger($phaseID, $state);
         }
     }
+    
     private function ImplementFinalMeasures(bool $isAnyRoomDemandingCooling) {
         $statusTextID = $this->ReadPropertyInteger('MainStatusTextLink');
         if ($isAnyRoomDemandingCooling) {
             $this->SwitchSystemOn();
-            if ($statusTextID > 0) @SetValueString($statusTextID, "Cooling Activated");
+            if ($statusTextID > 0 && @IPS_VariableExists($statusTextID)) @SetValueString($statusTextID, "Cooling Activated");
         } else {
             $this->SwitchSystemOff();
-            if ($statusTextID > 0) @SetValueString($statusTextID, "Cooling DEACTIVATED");
+            if ($statusTextID > 0 && @IPS_VariableExists($statusTextID)) @SetValueString($statusTextID, "Cooling DEACTIVATED");
             $specialModeID = $this->ReadPropertyInteger('MasterBedSpecialModeLink');
             if ($specialModeID > 0 && @GetValueInteger($specialModeID) != 0) {
                 $rooms = json_decode($this->ReadPropertyString('ControlledRooms'), true);
@@ -230,20 +232,21 @@ class Zoning_and_Demand_Manager extends IPSModule
             }
         }
     }
+
     private function SwitchSystemOn() {
         $acID = $this->ReadPropertyInteger('MainACOnOffLink');
-        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
         if ($acID > 0) @RequestAction($acID, true);
-        if ($fanID > 0) @RequestAction($fanID, true);
+        $this->SwitchFan(true);
         $this->LogMessage("Main AC System switched ON.", KL_MESSAGE);
     }
+
     private function SwitchSystemOff() {
         $acID = $this->ReadPropertyInteger('MainACOnOffLink');
-        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
+        $this->SwitchFan(false);
         if ($acID > 0) @RequestAction($acID, false);
-        if ($fanID > 0) @RequestAction($fanID, false);
         $this->LogMessage("Main AC System switched OFF.", KL_MESSAGE);
     }
+    
     private function SwitchFan(bool $state) {
         $fanID = $this->ReadPropertyInteger('MainFanControlLink');
         if ($fanID > 0) @RequestAction($fanID, $state);
