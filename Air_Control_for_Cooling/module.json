@@ -1,1 +1,13 @@
-
+{
+    "id": {CE67653F-2712-207E-4AF4-0F7CBACBEDED},
+    "name": "Zoning_and_Demand_Manager",
+    "type": 3,
+    "vendor": "Community",
+    "aliases": [
+        "HVAC Zoning Control"
+    ],
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "ZDM"
+}
