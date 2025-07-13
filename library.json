@@ -12,7 +12,7 @@
     "modules": [
         {
             "id": "{7F76322B-4447-4158-944A-16788255910F}",
-            "name": "adaptive_HVAC_control",
+            "name": "Adaptive Cooling Controller",
             "type": 3,
             "vendor": "Fisart",
             "aliases": [
@@ -21,11 +21,12 @@
             "parentRequirements": [],
             "childRequirements": [],
             "implemented": [],
-            "prefix": "ACIPS"
+            "prefix": "ACIPS",
+            "directory": "adaptive_HVAC_control"
         },
         {
             "id": "{F1A2B3C4-D5E6-F7A8-B9C0-D1E2F3A4B5C6}",
-            "name": "Zoning_and_Demand_Manager",
+            "name": "Zoning & Demand Manager",
             "type": 3,
             "vendor": "Fisart",
             "aliases": [
@@ -34,7 +35,8 @@
             "parentRequirements": [],
             "childRequirements": [],
             "implemented": [],
-            "prefix": "ZDM"
+            "prefix": "ZDM",
+            "directory": "Air_Control_for_Cooling"
         }
     ]
 }
