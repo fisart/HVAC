@@ -18,6 +18,7 @@
  * It controls individual room flaps based on temperature, window status,
  * and system-wide overrides (e.g., heating is active).
  */
+
 class Zoning_and_Demand_Manager extends IPSModule
 {
     public function Create()
@@ -32,6 +33,9 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MasterBedSpecialModeLink', 0);
         $this->RegisterPropertyInteger('MainStatusTextLink', 0);
         $this->RegisterPropertyString('ControlledRooms', '[]');
+
+        // Fix: Register the timer to prevent the "does not exist" warning on first ApplyChanges
+        $this->RegisterTimer('ProcessZoning', 0, '$this->ProcessZoning();');
     }
 
     public function ApplyChanges()
