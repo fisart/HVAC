@@ -57,37 +57,15 @@
         { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Control (On/Off)" },
         { "type": "Label", "label": " " },
         {
-            "type": "Label",
-            "label": "--- Standalone Mode Settings ---",
-            "visible": "this.OperatingMode == 'standalone'"
-        },
-        {
-            "type": "SelectVariable",
-            "name": "StandalonePowerLink",
-            "caption": "AC Power Variable",
-            "visible": "this.OperatingMode == 'standalone'"
-        },
-        {
-            "type": "SelectVariable",
-            "name": "StandaloneFanLink",
-            "caption": "AC Fan Speed Variable",
-            "visible": "this.OperatingMode == 'standalone'"
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "StandalonePowerValue",
-            "caption": "Fixed Power Value",
-            "suffix": "%",
-            "defaultValue": 80,
-            "visible": "this.OperatingMode == 'standalone'"
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "StandaloneFanValue",
-            "caption": "Fixed Fan Speed Value",
-            "suffix": "%",
-            "defaultValue": 80,
-            "visible": "this.OperatingMode == 'standalone'"
+            "type": "ExpansionPanel",
+            "caption": "Standalone Mode Settings",
+            "visible": "this.OperatingMode == 'standalone'",
+            "items": [
+                { "type": "SelectVariable", "name": "StandalonePowerLink", "caption": "AC Power Variable" },
+                { "type": "SelectVariable", "name": "StandaloneFanLink", "caption": "AC Fan Speed Variable" },
+                { "type": "NumberSpinner", "name": "StandalonePowerValue", "caption": "Fixed Power Value", "suffix": "%", "defaultValue": 80 },
+                { "type": "NumberSpinner", "name": "StandaloneFanValue", "caption": "Fixed Fan Speed Value", "suffix": "%", "defaultValue": 80 }
+            ]
         },
         { "type": "Label", "label": " " },
         {
