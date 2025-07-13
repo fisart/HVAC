@@ -1,6 +1,35 @@
 {
     "elements": [
-        { "type": "Label", "label": "This module is the master rule engine for a multi-zone HVAC system. It controls individual room flaps and determines which rooms are demanding cooling." },
+        { 
+            "type": "ExpansionPanel", 
+            "caption": "Help & Documentation",
+            "items": [
+                { "type": "Label", "caption": "doc_intro" },
+                { "type": "Label", "caption": " " },
+                { "type": "Label", "caption": "<b>doc_h_general</b>" },
+                { "type": "Label", "caption": "doc_debug" },
+                { "type": "Label", "caption": "doc_timer" },
+                { "type": "Label", "caption": " " },
+                { "type": "Label", "caption": "<b>doc_h_overrides</b>" },
+                { "type": "Label", "caption": "doc_heating" },
+                { "type": "Label", "caption": "doc_ventilation" },
+                { "type": "Label", "caption": "doc_fan" },
+                { "type": "Label", "caption": "doc_ac" },
+                { "type": "Label", "caption": "doc_masterbed" },
+                { "type": "Label", "caption": "doc_status" },
+                { "type": "Label", "caption": " " },
+                { "type": "Label", "caption": "<b>doc_h_rooms</b>" },
+                { "type": "Label", "caption": "doc_r_name" },
+                { "type": "Label", "caption": "doc_r_temp" },
+                { "type": "Label", "caption": "doc_r_target" },
+                { "type": "Label", "caption": "doc_r_window" },
+                { "type": "Label", "caption": "doc_r_demand" },
+                { "type": "Label", "caption": "doc_r_flap" },
+                { "type": "Label", "caption": "doc_r_flaptype" },
+                { "type": "Label", "caption": "doc_r_flapopen" },
+                { "type": "Label", "caption": "doc_r_flapclosed" }
+            ]
+        },
         { "type": "Label", "label": " " },
         { "type": "CheckBox", "name": "Debug", "caption": "Enable Debug Logging" },
         { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "defaultValue": 60 },
