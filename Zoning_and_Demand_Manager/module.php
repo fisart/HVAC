@@ -19,7 +19,7 @@
  * It controls individual room flaps based on temperature, window status,
  * and system-wide overrides (e.g., heating is active).
  */
-class ZoningDemandManager extends IPSModule
+class Zoning_and_Demand_Manager extends IPSModule
 {
     public function Create()
     {
