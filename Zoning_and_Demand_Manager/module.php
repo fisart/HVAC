@@ -2,7 +2,7 @@
 /**
  * Zoning & Demand Manager (ZoningDemandManager)
  *
- * Version: 2.0
+ * Version: 2.1
  * Author: Artur Fischer
  *
  * This module is the master rule engine for a multi-zone HVAC system.
@@ -26,6 +26,12 @@ class Zoning_and_Demand_Manager extends IPSModule
         parent::Create();
         $this->RegisterPropertyBoolean('Debug', false);
         $this->RegisterPropertyInteger('TimerInterval', 60);
+
+        // --- NEW Properties for Standalone Mode ---
+        $this->RegisterPropertyBoolean('StandaloneMode', false);
+        $this->RegisterPropertyInteger('ConstantFanSpeed', 0);
+        $this->RegisterPropertyInteger('ConstantPower', 0);
+        
         $this->RegisterPropertyInteger('HeatingActiveLink', 0);
         $this->RegisterPropertyInteger('VentilationActiveLink', 0);
         $this->RegisterPropertyInteger('MainFanControlLink', 0);
@@ -34,7 +40,6 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MainStatusTextLink', 0);
         $this->RegisterPropertyString('ControlledRooms', '[]');
 
-        // Fix: Register the timer to prevent the "does not exist" warning on first ApplyChanges
         $this->RegisterTimer('ProcessZoning', 0, '$this->ProcessZoning();');
     }
 
@@ -42,7 +47,28 @@ class Zoning_and_Demand_Manager extends IPSModule
     {
         parent::ApplyChanges();
         $this->SetTimerInterval('ProcessZoning', $this->ReadPropertyInteger('TimerInterval') * 1000);
-        $this->SetStatus(102);
+        $this->SetStatus(102); // Set to active status
+    }
+
+    /**
+     * This function is called by IP-Symcon to display the configuration form.
+     * It dynamically shows or hides the constant value settings based on the StandaloneMode checkbox.
+     */
+    public function GetConfigurationForm()
+    {
+        $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
+        
+        // Get the current state of the StandaloneMode property
+        $isStandalone = $this->ReadPropertyBoolean('StandaloneMode');
+
+        // Find the elements for constant values and set their visibility
+        foreach ($form['elements'] as &$element) {
+            if (isset($element['name']) && ($element['name'] == 'ConstantFanSpeed' || $element['name'] == 'ConstantPower')) {
+                $element['visible'] = $isStandalone;
+            }
+        }
+        
+        return json_encode($form);
     }
     
     public function ProcessZoning()
@@ -70,7 +96,6 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("--- END Zoning & Demand Check ---", KL_MESSAGE);
     }
 
-    // --- MODIFIED FUNCTION WITH 3-MODE LOGIC ---
     private function ProcessRoom(array $roomConfig): bool
     {
         $roomName = $roomConfig['name'] ?? '';
@@ -95,15 +120,13 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // Mode-specific logic
         if ($coolingMode === 'ON') { // One-shot cooling
-            // If it has already been cooled (phase is not 0), and is no longer too high, it stays off.
             if ($currentPhase !== 0 && !$this->IsRoomTooHigh($roomConfig)) {
                 $this->LogMessage("{$roomName}: Mode is ON, but target already reached. Deactivating permanently for this cycle.", KL_MESSAGE);
-                $this->DeactivateRoom($roomConfig, $currentPhase); // Keep the phase to show it was completed
+                $this->DeactivateRoom($roomConfig, $currentPhase);
                 return false;
             }
         }
         
-        // For both ON (first time) and AUTO, check if temp is too high
         if ($this->IsRoomTooHigh($roomConfig)) {
             $this->LogMessage("{$roomName}: Temperature is high, cooling is required.", KL_MESSAGE);
             $phase = ($coolingMode === 'ON') ? 1 : 2; // Phase 1 for ON, 2 for AUTO
@@ -111,7 +134,6 @@ class Zoning_and_Demand_Manager extends IPSModule
             return true;
         }
 
-        // If we reach here, temp is not too high
         $this->LogMessage("{$roomName}: Temperature is OK. Deactivating room.", KL_MESSAGE);
         $this->DeactivateRoom($roomConfig, 0); // Reset phase to 0
         return false;
@@ -137,10 +159,9 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($phaseID > 0 && @IPS_VariableExists($phaseID)) {
             return @GetValueInteger($phaseID);
         }
-        return 0; // Default to 0 if not configured
+        return 0;
     }
 
-    // --- FULL, UNCHANGED HELPER FUNCTIONS FOR COMPLETENESS ---
     private function IsSystemOverridden(): bool {
         $heatingID = $this->ReadPropertyInteger('HeatingActiveLink');
         if ($heatingID > 0 && @GetValueBoolean($heatingID)) {
@@ -238,22 +259,50 @@ class Zoning_and_Demand_Manager extends IPSModule
             }
         }
     }
-    private function SwitchSystemOn() {
+
+    // --- NEW: Mode-aware helper function to control the AC ---
+    private function SetAcState(bool $on) {
         $acID = $this->ReadPropertyInteger('MainACOnOffLink');
-        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
-        if ($acID > 0) @RequestAction($acID, true);
-        if ($fanID > 0) @RequestAction($fanID, true);
-        $this->LogMessage("Main AC System switched ON.", KL_MESSAGE);
+        if ($acID <= 0) return;
+
+        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+            $value = $on ? $this->ReadPropertyInteger('ConstantPower') : 0;
+            @RequestAction($acID, $value);
+        } else {
+            @RequestAction($acID, $on);
+        }
     }
-    private function SwitchSystemOff() {
-        $acID = $this->ReadPropertyInteger('MainACOnOffLink');
+    
+    // --- NEW: Mode-aware helper function to control the Fan ---
+    private function SetFanState(bool $on) {
         $fanID = $this->ReadPropertyInteger('MainFanControlLink');
-        if ($acID > 0) @RequestAction($acID, false);
-        if ($fanID > 0) @RequestAction($fanID, false);
+        if ($fanID <= 0) return;
+        
+        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+            $value = $on ? $this->ReadPropertyInteger('ConstantFanSpeed') : 0;
+            @RequestAction($fanID, $value);
+        } else {
+            @RequestAction($fanID, $on);
+        }
+    }
+
+    // --- REFACTORED: Use new helper functions ---
+    private function SwitchSystemOn() {
+        $this->SetAcState(true);
+        $this->SetFanState(true);
+        $mode = $this->ReadPropertyBoolean('StandaloneMode') ? "Standalone" : "Adaptive";
+        $this->LogMessage("Main AC System switched ON. Mode: {$mode}.", KL_MESSAGE);
+    }
+
+    // --- REFACTORED: Use new helper functions ---
+    private function SwitchSystemOff() {
+        $this->SetAcState(false);
+        $this->SetFanState(false);
         $this->LogMessage("Main AC System switched OFF.", KL_MESSAGE);
     }
+    
+    // --- REFACTORED: Use new helper function ---
     private function SwitchFan(bool $state) {
-        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
-        if ($fanID > 0) @RequestAction($fanID, $state);
+        $this->SetFanState($state);
     }
 }
