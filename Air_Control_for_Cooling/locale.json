@@ -1,1 +1,29 @@
-
+{
+    "translations": {
+        "de": {
+            "Zoning & Demand Manager": "Zonen- & Bedarfs-Manager",
+            "This module is the master rule engine for a multi-zone HVAC system. It controls individual room flaps and determines which rooms are demanding cooling.": "Dieses Modul ist die Master-Regel-Engine für ein Mehrzonen-HVAC-System. Es steuert einzelne Raumklappen und bestimmt, welche Räume Kühlung anfordern.",
+            "Enable Debug Logging": "Debug-Logging aktivieren",
+            "Processing Interval (seconds)": "Verarbeitungsintervall (Sekunden)",
+            "--- System-Wide Overrides & Controls ---": "--- Systemweite Sperren & Steuerungen ---",
+            "Heating Active Link (disables cooling)": "Verknüpfung für Heizung Aktiv (deaktiviert Kühlung)",
+            "Ventilation Active Link (disables cooling)": "Verknüpfung für Lüftung Aktiv (deaktiviert Kühlung)",
+            "Main Fan Control (On/Off)": "Hauptlüftersteuerung (Ein/Aus)",
+            "Main AC Unit (On/Off)": "Haupt-Klimagerät (Ein/Aus)",
+            "Master Bedroom Special Mode Link": "Verknüpfung für Spezialmodus Schlafzimmer",
+            "System Status Text Variable": "Variable für Systemstatus-Text",
+            "Controlled Rooms": "Gesteuerte Räume",
+            "Room Name": "Raumname",
+            "Temp Sensor": "Temperatursensor",
+            "Target Temp": "Solltemperatur",
+            "Window/Door Sensor Category": "Kategorie für Fenster-/Türsensoren",
+            "Demand Output (to Adaptive Module)": "Bedarfsausgabe (an Adaptives Modul)",
+            "Flap Control Variable": "Variable für Klappensteuerung",
+            "Flap Type": "Klappentyp",
+            "Boolean": "Boolesch",
+            "Linear (0-100)": "Linear (0-100)",
+            "Value for OPEN": "Wert für GEÖFFNET",
+            "Value for CLOSED": "Wert für GESCHLOSSEN"
+        }
+    }
+}
