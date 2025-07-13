@@ -12,7 +12,7 @@
     "modules": [
         {
             "id": "{7F76322B-4447-4158-944A-16788255910F}",
-            "name": "Adaptive Cooling Controller",
+            "name": "adaptive_HVAC_control",
             "type": 3,
             "vendor": "Fisart",
             "aliases": [
