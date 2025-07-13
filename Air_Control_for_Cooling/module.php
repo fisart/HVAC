@@ -1,7 +1,7 @@
 
 <?php
 
-class ZoningDemandManager extends IPSModule
+class Zoning_and_Demand_Manager extends IPSModule
 {
     public function Create()
     {
