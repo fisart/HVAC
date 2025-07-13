@@ -47,7 +47,6 @@
                 { "type": "Label", "caption": "doc_d_r_flapclosed" }
             ]
         },
-        // ... The rest of your form elements from the last complete code ...
         { "type": "Label", "label": " " },
         { "type": "CheckBox", "name": "Debug", "caption": "Enable Debug Logging" },
         { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "defaultValue": 60 },
@@ -60,6 +59,30 @@
         { "type": "SelectVariable", "name": "MasterBedSpecialModeLink", "caption": "Master Bedroom Special Mode Link" },
         { "type": "SelectVariable", "name": "MainStatusTextLink", "caption": "System Status Text Variable" },
         { "type": "Label", "label": " " },
-        { "type": "List", "name": "ControlledRooms", /* ... as before ... */ }
+        {
+            "type": "List",
+            "name": "ControlledRooms",
+            "caption": "Controlled Rooms",
+            "rowCount": 5,
+            "add": true,
+            "delete": true,
+            "columns": [
+                { "caption": "Room Name", "name": "name", "width": "150px", "add": "New Room", "edit": { "type": "ValidationTextBox" } },
+                { "caption": "Temp Sensor", "name": "tempID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+                { "caption": "Target Temp", "name": "targetID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+                { "caption": "Window/Door Sensor Category", "name": "windowCatID", "width": "200px", "add": 0, "edit": { "type": "SelectCategory" } },
+                { "caption": "Demand Output (to Adaptive Module)", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+                { "caption": "Flap Control Variable", "name": "flapID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+                { "caption": "Flap Type", "name": "flapType", "width": "120px", "add": "boolean", "edit": { "type": "Select", "options": [{"label": "Boolean", "value": "boolean"}, {"label": "Linear (0-100)", "value": "linear"}] } },
+                { "caption": "Value for OPEN", "name": "flapOpenValue", "width": "120px", "add": "true", "edit": { "type": "ValidationTextBox" } },
+                { "caption": "Value for CLOSED", "name": "flapClosedValue", "width": "120px", "add": "false", "edit": { "type": "ValidationTextBox" } }
+            ]
+        }
+    ],
+    "actions": [],
+    "status": [
+        { "code": 102, "icon": "active", "caption": "Zoning control is active." },
+        { "code": 104, "icon": "inactive", "caption": "Module is not fully configured." },
+        { "code": 201, "icon": "inactive", "caption": "System is disabled by a global override." }
     ]
 }
