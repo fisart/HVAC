@@ -1,5 +1,4 @@
 <?php
-
 /**
  * Zoning & Demand Manager (ZoningDemandManager)
  *
@@ -136,20 +135,6 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
         return 0; // Default to 0 if not configured
     }
-
-    private function IsSystemOverridden(): bool { /* ... unchanged ... */ }
-    private function IsWindowOpen(array $roomConfig): bool { /* ... unchanged ... */ }
-    private function IsRoomTooCold(array $roomConfig): bool { /* ... unchanged ... */ }
-    private function IsRoomTooHigh(array $roomConfig): bool { /* ... unchanged ... */ }
-    private function ActivateRoom(array $roomConfig, int $phaseInfo) { /* ... unchanged ... */ }
-    private function DeactivateRoom(array $roomConfig, int $phaseInfo) { /* ... unchanged ... */ }
-    private function SetFlapState(array $roomConfig, bool $shouldBeOpen) { /* ... unchanged ... */ }
-    private function SetDemandState(int $demandID, int $state) { /* ... unchanged ... */ }
-    private function SetCoolingPhaseInfo(int $phaseID, int $state) { /* ... unchanged ... */ }
-    private function ImplementFinalMeasures(bool $isAnyRoomDemandingCooling) { /* ... unchanged ... */ }
-    private function SwitchSystemOn() { /* ... unchanged ... */ }
-    private function SwitchSystemOff() { /* ... unchanged ... */ }
-    private function SwitchFan(bool $state) { /* ... unchanged ... */ }
 
     // --- FULL, UNCHANGED HELPER FUNCTIONS FOR COMPLETENESS ---
     private function IsSystemOverridden(): bool {
