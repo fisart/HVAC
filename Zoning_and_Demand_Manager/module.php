@@ -2,7 +2,7 @@
 /**
  * Zoning & Demand Manager (ZoningDemandManager)
  *
- * Version: 2.3
+ * Version: 2.4
  * Author: Artur Fischer
  */
 
@@ -13,9 +13,13 @@ class Zoning_and_Demand_Manager extends IPSModule
         parent::Create();
         $this->RegisterPropertyBoolean('Debug', false);
         $this->RegisterPropertyInteger('TimerInterval', 60);
+        $this->RegisterPropertyFloat('Hysteresis', 0.5);
+
+        // --- Operating Mode ---
         $this->RegisterPropertyBoolean('StandaloneMode', false);
         $this->RegisterPropertyInteger('ConstantFanSpeed', 0);
         $this->RegisterPropertyInteger('ConstantPower', 0);
+        
         $this->RegisterPropertyInteger('HeatingActiveLink', 0);
         $this->RegisterPropertyInteger('VentilationActiveLink', 0);
         $this->RegisterPropertyInteger('MainFanControlLink', 0);
@@ -23,6 +27,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MasterBedSpecialModeLink', 0);
         $this->RegisterPropertyInteger('MainStatusTextLink', 0);
         $this->RegisterPropertyString('ControlledRooms', '[]');
+
         $this->RegisterTimer('ProcessZoning', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
     }
 
@@ -181,7 +186,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
             $temp = GetValueFloat($tempID);
             $target = GetValueFloat($targetID);
-            $hysteresis = 0.5;
+            $hysteresis = $this->ReadPropertyFloat('Hysteresis');
             return $temp <= ($target - $hysteresis);
         }
         return false;
@@ -193,7 +198,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
             $temp = GetValueFloat($tempID);
             $target = GetValueFloat($targetID);
-            $hysteresis = 0.5;
+            $hysteresis = $this->ReadPropertyFloat('Hysteresis');
             return $temp > ($target + $hysteresis);
         }
         return false;
