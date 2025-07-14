@@ -248,13 +248,13 @@ class adaptive_HVAC_control extends IPSModule
             $html .= '<li><b>c - Coil Safety Bin:</b> How close is the coil to freezing? (-2=danger, 5=very safe)</li>';
             $html .= '<li><b>o - Overcool Bin:</b> Is any room getting TOO cold? (0=none, 3=very overcooled)</li>';
             $html .= '<li><b>t - Coil Trend Bin:</b> Is the AC actively cooling? (-1=cooling, 0=stable, 1=warming)</li>';
-            $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-3+)</li></ul>';
+            $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-4+)</li></ul>';
         } else { // Cooperative Mode
             $html .= '<b>State Format: (d | c | t | r)</b>';
             $html .= '<ul><li><b>d - Demand Bin:</b> How hot is the HOTTEST room? (0=at target, 5=very hot)</li>';
             $html .= '<li><b>c - Coil Safety Bin:</b> How close is the coil to freezing? (-2=danger, 5=very safe)</li>';
             $html .= '<li><b>t - Coil Trend Bin:</b> Is the AC actively cooling? (-1=cooling, 0=stable, 1=warming)</li>';
-            $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-3+)</li></ul>';
+            $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-4+)</li></ul>';
             $html .= '<p style="margin-top: 5px;"><i><b>Note:</b> Overcool Bin (o) is disabled in Cooperative Mode as the Zoning Manager prevents rooms from getting too cold.</i></p>';
         }
         
@@ -403,7 +403,7 @@ class adaptive_HVAC_control extends IPSModule
         $dBin = min(5, (int)floor($maxDeviation));
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
         $oBin = min(3, (int)floor($D_cold));
-        $hotRoomCountBin = min(3, $hotRoomCount);
+        $hotRoomCountBin = min(4, $hotRoomCount); // Changed from 3 to 4
         return [$cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $D_cold];
     }
     
