@@ -180,13 +180,22 @@ class Zoning_and_Demand_Manager extends IPSModule
     }
     private function IsWindowOpen(array $roomConfig): bool {
         $catID = $roomConfig['windowCatID'] ?? 0;
-        if ($catID <= 0 || !@IPS_CategoryExists($catID)) return false;
-        foreach(IPS_GetChildrenIDs($catID) as $childID) {
-            if (@IPS_VariableExists($childID) && GetValueBoolean($childID)) {
-                return true;
+        if ($catID <= 0 || !@IPS_CategoryExists($catID)) {
+            return false;
+        }
+        // Get all children of the specified category
+        foreach (IPS_GetChildrenIDs($catID) as $childID) {
+            // Check if the child is a Link
+            if (IPS_LinkExists($childID)) {
+                $linkInfo = IPS_GetLink($childID);
+                $targetID = $linkInfo['TargetID'];
+                // Check if the link's target is a variable and if its value is true (non-zero)
+                if (@IPS_VariableExists($targetID) && GetValueBoolean($targetID)) {
+                    return true; // A window/door is open
+                }
             }
         }
-        return false;
+        return false; // All windows/doors are closed
     }
     private function IsRoomTooCold(array $roomConfig): bool {
         $temp = @GetValueFloat($roomConfig['tempID']);
