@@ -2,7 +2,7 @@
 /**
  * Zoning & Demand Manager (ZoningDemandManager)
  *
- * Version: 2.1
+ * Version: 2.2
  * Author: Artur Fischer
  *
  * This module is the master rule engine for a multi-zone HVAC system.
@@ -40,7 +40,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MainStatusTextLink', 0);
         $this->RegisterPropertyString('ControlledRooms', '[]');
 
-        // The corrected timer registration
+        // Correct timer registration using the module prefix
         $this->RegisterTimer('ProcessZoning', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
     }
 
@@ -190,9 +190,13 @@ class Zoning_and_Demand_Manager extends IPSModule
             if (IPS_LinkExists($childID)) {
                 $linkInfo = IPS_GetLink($childID);
                 $targetID = $linkInfo['TargetID'];
-                // Check if the link's target is a variable and if its value is true (non-zero)
-                if (@IPS_VariableExists($targetID) && GetValueBoolean($targetID)) {
-                    return true; // A window/door is open
+                // Check if the link's target is a variable
+                if (@IPS_VariableExists($targetID)) {
+                    // Use generic GetValue(). PHP's truthiness check handles both boolean (true)
+                    // and integer (non-zero) types correctly without warnings.
+                    if (GetValue($targetID)) {
+                        return true; // A window/door is open
+                    }
                 }
             }
         }
