@@ -40,7 +40,8 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MainStatusTextLink', 0);
         $this->RegisterPropertyString('ControlledRooms', '[]');
 
-        $this->RegisterTimer('ProcessZoning', 0, '$this->ProcessZoning();');
+        // The corrected timer registration
+        $this->RegisterTimer('ProcessZoning', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
