@@ -108,18 +108,36 @@ class adaptive_HVAC_control extends IPSModule
         
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
         $isCoolingNeeded = false;
-        $hysteresis = $this->ReadPropertyFloat('Hysteresis');
-        foreach ($monitoredRooms as $room) {
-            $tempID = $room['tempID'] ?? 0;
-            $targetID = $room['targetID'] ?? 0;
-            if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
-                if (GetValue($tempID) > (GetValue($targetID) + ($room['threshold'] ?? $hysteresis))) {
+        
+        // =====================================================================
+        // === BUG FIX: The logic to determine if cooling is needed must respect the operating mode ===
+        $operatingMode = $this->ReadPropertyString('OperatingMode');
+
+        if ($operatingMode === 'cooperative') {
+            // In cooperative mode, trust the demand variables from the Zoning Manager.
+            foreach ($monitoredRooms as $room) {
+                $demandID = $room['demandID'] ?? 0;
+                if ($demandID > 0 && IPS_VariableExists($demandID) && GetValueInteger($demandID) > 0) {
                     $isCoolingNeeded = true;
                     break;
                 }
             }
+        } else {
+            // In standalone mode, check temperatures directly.
+            $hysteresis = $this->ReadPropertyFloat('Hysteresis');
+            foreach ($monitoredRooms as $room) {
+                $tempID = $room['tempID'] ?? 0;
+                $targetID = $room['targetID'] ?? 0;
+                if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
+                    if (GetValue($tempID) > (GetValue($targetID) + ($room['threshold'] ?? $hysteresis))) {
+                        $isCoolingNeeded = true;
+                        break;
+                    }
+                }
+            }
         }
-        
+        // =====================================================================
+
         if (!$isCoolingNeeded) {
             $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
             if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
@@ -147,12 +165,11 @@ class adaptive_HVAC_control extends IPSModule
         $prevTs = $meta['ts'] ?? null;
         $prev_WAD = $meta['WAD'] ?? 0;
         $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
-        $coilState = max($coilTemp, $minCoil + $hysteresis);
+        $coilState = max($coilTemp, $minCoil + $this->ReadPropertyFloat('Hysteresis'));
         
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
         
-        $operatingMode = $this->ReadPropertyString('OperatingMode');
         $state = '';
         $r_overcool = 0.0;
         if ($operatingMode === 'standalone') {
@@ -206,7 +223,6 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
 
-    // ... (All other functions from GenerateQTableHTML onwards remain the same as the last version) ...
     public function UpdateVisualization() {
         $this->SetValue("QTableHTML", $this->GenerateQTableHTML());
         if ($_IPS['SENDER'] == 'WebFront') {
@@ -382,13 +398,19 @@ class adaptive_HVAC_control extends IPSModule
             $demandID = $room['demandID'] ?? 0;
             $roomSize = $room['size'] ?? 1;
             $threshold = $room['threshold'] ?? $this->ReadPropertyFloat('Hysteresis');
-            if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
-                if ($demandID > 0 && IPS_VariableExists($demandID) && GetValueInteger($demandID) == 0) {
+
+            // In cooperative mode, only consider rooms that have an active demand signal.
+            if ($this->ReadPropertyString('OperatingMode') === 'cooperative') {
+                if ($demandID == 0 || !IPS_VariableExists($demandID) || GetValueInteger($demandID) == 0) {
                     continue; 
                 }
+            }
+
+            if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
                 $temp = GetValue($tempID);
                 $target = GetValue($targetID);
                 $deviation = $temp - $target;
+
                 if ($deviation > 0) {
                     $maxDeviation = max($maxDeviation, $deviation);
                 }
