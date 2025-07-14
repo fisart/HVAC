@@ -101,7 +101,9 @@
             ]
         }
     ],
-    "actions": [],
+    "actions": [
+        { "type": "Button", "label": "Run Zoning Check", "onClick": "ZDM_ProcessZoning($id);" }
+    ],
     "status": [
         { "code": 102, "icon": "active", "caption": "Zoning control is active." },
         { "code": 104, "icon": "inactive", "caption": "Module is not fully configured." },
