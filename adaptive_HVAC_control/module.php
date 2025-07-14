@@ -23,6 +23,8 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('TimerInterval', 120);
         $this->RegisterPropertyInteger('PowerStep', 20);
         $this->RegisterPropertyInteger('FanStep', 20);
+        $this->RegisterPropertyString('OperatingMode', 'cooperative');
+        $this->RegisterAttributeString('LastOperatingMode', 'cooperative');
         $this->RegisterAttributeString('QTable', json_encode([]));
         $this->RegisterAttributeString('MetaData', json_encode([]));
         $this->RegisterAttributeFloat('Epsilon', 0.3);
@@ -35,6 +37,20 @@ class adaptive_HVAC_control extends IPSModule
     public function ApplyChanges()
     {
         parent::ApplyChanges();
+
+        // Check for operating mode change and warn the user
+        $currentMode = $this->ReadPropertyString('OperatingMode');
+        $lastMode = $this->ReadAttributeString('LastOperatingMode');
+
+        if ($lastMode !== '' && $currentMode !== $lastMode) {
+            $this->LogMessage(
+                'Operating Mode has been changed. The Q-Table state definition has changed. ' .
+                'It is STRONGLY recommended to use the "Reset Learning" button to clear the Q-Table.',
+                KL_WARNING
+            );
+        }
+        $this->WriteAttributeString('LastOperatingMode', $currentMode);
+
         $this->SetTimerInterval('ProcessCoolingLogic', $this->ReadPropertyInteger('TimerInterval') * 1000);
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode(json_decode($this->ReadAttributeString('QTable')), JSON_PRETTY_PRINT));
@@ -120,6 +136,9 @@ class adaptive_HVAC_control extends IPSModule
         $Q = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($Q)) { $Q = []; }
         $meta = json_decode($this->ReadAttributeString('MetaData'), true) ?: [];
+        
+        $operatingMode = $this->ReadPropertyString('OperatingMode');
+        
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
         $coilTemp = GetValue($this->ReadPropertyInteger('CoilTempLink'));
         $prevState = $meta['state'] ?? null;
@@ -128,15 +147,30 @@ class adaptive_HVAC_control extends IPSModule
         $prev_WAD = $meta['WAD'] ?? 0;
         $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
         $coilState = max($coilTemp, $minCoil + $hysteresis);
+        
         list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
-        $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
+        
+        $state = '';
+        $r_overcool = 0.0;
+
+        if ($operatingMode === 'standalone') {
+            // In standalone mode, include the overcool bin in the state
+            $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
+            // And calculate the overcool penalty
+            $r_overcool = -$rawD_cold * 5;
+        } else {
+            // In cooperative mode, exclude the overcool bin
+            $state = "$dBin|$cBin|$coilTrendBin|$hotRoomCountBin";
+            // The overcool reward is not needed, it remains 0.
+        }
+        
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
         list($prevP, $prevF) = explode(':', $prevAction);
         $r_energy = -0.01 * (intval($prevP) + intval($prevF));
-        $r_overcool = -$rawD_cold * 5;
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
+
         if ($prevState !== null && $prevTs !== null) {
             $dt = max(1, (time() - intval($prevTs)) / 60);
             $dt = min($dt, 10);
@@ -196,6 +230,8 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '.color-box { width: 15px; height: 15px; border: 1px solid #666; display: inline-block; vertical-align: middle; margin-right: 5px; }';
         $html .= 'ul { margin: 5px 0; padding-left: 20px; } li { margin-bottom: 3px; }';
         $html .= '</style></head><body>';
+
+        $operatingMode = $this->ReadPropertyString('OperatingMode');
         $html .= '<h3>Q-Table Visualization Legend</h3>';
         $html .= '<div class="legend">';
         $html .= '<div><b>Rows (Y-Axis):</b> Represent the "State" of the system.</div>';
@@ -204,12 +240,24 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '<div class="legend-item"><span class="color-box" style="background-color: #90ee90;"></span>Green = Good Action</div>';
         $html .= '<div class="legend-item"><span class="color-box" style="background-color: #ffcccb;"></span>Red = Bad Action</div>';
         $html .= '<div class="legend-item"><span class="color-box" style="background-color: #f0f0f0;"></span>Grey = Unexplored</div>';
-        $html .= '<div style="margin-top: 10px;"><b>State Format: (d | c | o | t | r)</b>';
-        $html .= '<ul><li><b>d - Demand Bin:</b> How hot is the HOTTEST room? (0=at target, 5=very hot)</li>';
-        $html .= '<li><b>c - Coil Safety Bin:</b> How close is the coil to freezing? (-2=danger, 5=very safe)</li>';
-        $html .= '<li><b>o - Overcool Bin:</b> Is any room getting TOO cold? (0=none, 3=very overcooled)</li>';
-        $html .= '<li><b>t - Coil Trend Bin:</b> Is the AC actively cooling? (-1=cooling, 0=stable, 1=warming)</li>';
-        $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-3+)</li></ul>';
+        $html .= '<div style="margin-top: 10px;">';
+
+        if ($operatingMode === 'standalone') {
+            $html .= '<b>State Format: (d | c | o | t | r)</b>';
+            $html .= '<ul><li><b>d - Demand Bin:</b> How hot is the HOTTEST room? (0=at target, 5=very hot)</li>';
+            $html .= '<li><b>c - Coil Safety Bin:</b> How close is the coil to freezing? (-2=danger, 5=very safe)</li>';
+            $html .= '<li><b>o - Overcool Bin:</b> Is any room getting TOO cold? (0=none, 3=very overcooled)</li>';
+            $html .= '<li><b>t - Coil Trend Bin:</b> Is the AC actively cooling? (-1=cooling, 0=stable, 1=warming)</li>';
+            $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-3+)</li></ul>';
+        } else { // Cooperative Mode
+            $html .= '<b>State Format: (d | c | t | r)</b>';
+            $html .= '<ul><li><b>d - Demand Bin:</b> How hot is the HOTTEST room? (0=at target, 5=very hot)</li>';
+            $html .= '<li><b>c - Coil Safety Bin:</b> How close is the coil to freezing? (-2=danger, 5=very safe)</li>';
+            $html .= '<li><b>t - Coil Trend Bin:</b> Is the AC actively cooling? (-1=cooling, 0=stable, 1=warming)</li>';
+            $html .= '<li><b>r - Room Count Bin:</b> How many rooms need cooling? (0-3+)</li></ul>';
+            $html .= '<p style="margin-top: 5px;"><i><b>Note:</b> Overcool Bin (o) is disabled in Cooperative Mode as the Zoning Manager prevents rooms from getting too cold.</i></p>';
+        }
+        
         $html .= '</div></div>';
         $html .= '<table><thead><tr><th class="state-col">State</th>';
         foreach ($actions as $action) {
