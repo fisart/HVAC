@@ -64,6 +64,7 @@
         { "type": "Label", "label": " " },
         { "type": "CheckBox", "name": "Debug", "caption": "Enable Debug Logging" },
         { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "defaultValue": 60 },
+        { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (°)", "defaultValue": 0.5, "digits": 1, "suffix": "°" },
         { "type": "Label", "label": " " },
         { "type": "Label", "label": "--- Operating Mode ---" },
         { "type": "CheckBox", "name": "StandaloneMode", "caption": "Standalone Mode", "info": "Activate to run without the adaptive_HVAC_control module." },
