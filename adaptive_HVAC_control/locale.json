@@ -2,6 +2,9 @@
     "translations": {
         "de": {
             "Adaptive Cooling Controller": "Adaptiver Kühlungs-Regler",
+            "Operating Mode": "Betriebsmodus",
+            "Cooperative (with Zoning & Demand Manager)": "Kooperativ (mit Zonen- & Bedarfs-Manager)",
+            "Standalone": "Eigenständiger Modus",
             "Log Level": "Log-Level",
             "Manual Override": "Manuelle Steuerung",
             "Alpha (Learning Rate)": "Alpha (Lernrate)",
