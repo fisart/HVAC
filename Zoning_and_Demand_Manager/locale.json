@@ -5,6 +5,7 @@
             "Help & Documentation": "Hilfe & Dokumentation",
             "Enable Debug Logging": "Debug-Logging aktivieren",
             "Processing Interval (seconds)": "Verarbeitungsintervall (Sekunden)",
+            "Hysteresis (°)": "Hysterese (°)",
             
             "--- Operating Mode ---": "--- Betriebsmodus ---",
             "Standalone Mode": "Eigenständiger Modus",
@@ -96,6 +97,7 @@
             "Help & Documentation": "Help & Documentation",
             "Enable Debug Logging": "Enable Debug Logging",
             "Processing Interval (seconds)": "Processing Interval (seconds)",
+            "Hysteresis (°)": "Hysteresis (°)",
 
             "--- Operating Mode ---": "--- Operating Mode ---",
             "Standalone Mode": "Standalone Mode",
