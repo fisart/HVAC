@@ -16,7 +16,7 @@ Das Modul steuert direkt die Luftklappen der einzelnen Zonen und signalisiert de
 Das Modul arbeitet entweder eigenständig (Standalone) oder in Kooperation mit dem `adaptive_HVAC_control`-Modul. Es steuert beliebige Aktor-Variablen (Boolean/Integer/Float) für Luftklappen und die Hauptanlage.
 
 ### Modul-URL
-(Hier deine GitHub-URL einfügen, z.B. https://github.com/deinName/deinRepo)
+https://github.com/fisart/HVAC/tree/main/Zoning_and_Demand_Manager
 
 ### Einstellmöglichkeiten & PHP-Befehle
 Alle Einstellungen werden direkt im Konfigurationsformular der Instanz vorgenommen. Eine detaillierte Beschreibung aller Parameter befindet sich in der Haupt-Dokumentationsdatei der Bibliothek. Über den "Run Zoning Check"-Button kann die Logik manuell ausgelöst werden.
