@@ -51,6 +51,7 @@
                 { "type": "Label", "label": "System Settings:" },
                 { "type": "NumberSpinner", "name": "PowerStep", "caption": "Power Step Size", "suffix": "%", "defaultValue": 20 },
                 { "type": "NumberSpinner", "name": "FanStep", "caption": "Fan Step Size", "suffix": "%", "defaultValue": 20 },
+                { "type": "ValidationTextBox", "name": "CustomFanSpeeds", "caption": "Custom Fan Speeds", "info": "Enter specific fan speed levels separated by commas (e.g., 10,30,50,70,90,100). This will override 'Fan Step Size'." },
                 { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Timer Interval (seconds)", "suffix": "s", "defaultValue": 120 },
                 { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (Global)", "suffix": "°", "digits": 1, "defaultValue": 0.5 },
                 { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Change per Step", "suffix": "%", "defaultValue": 40 },
