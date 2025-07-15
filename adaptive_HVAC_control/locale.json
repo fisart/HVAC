@@ -23,7 +23,9 @@
             "Reset Learning": "Lernen zurücksetzen",
             "Rooms": "Räume (Temperatur)",
             "Targets": "Ziele (Soll-Temperatur)",
-            "RoomSizes": "Raumgrößen"
+            "RoomSizes": "Raumgrößen",
+            "Custom Fan Speeds": "Benutzerdefinierte Lüfterstufen",
+            "Enter specific fan speed levels separated by commas (e.g., 10,30,50,70,90,100). This will override 'Fan Step Size'.": "Spezifische Lüfterstufen mit Komma getrennt eingeben (z.B. 10,30,50,70,90,100). Überschreibt 'Lüfter Schrittweite'."
         }
     }
 }
