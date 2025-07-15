@@ -2,7 +2,7 @@
 /**
  * Adaptive HVAC Control
  *
- * Version: 2.6 (Corrected Logging)
+ * Version: 2.7 (Custom Fan Speeds)
  * Author: Artur Fischer
  */
 
@@ -30,6 +30,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('TimerInterval', 120);
         $this->RegisterPropertyInteger('PowerStep', 20);
         $this->RegisterPropertyInteger('FanStep', 20);
+        $this->RegisterPropertyString('CustomFanSpeeds', '');
         $this->RegisterPropertyString('OperatingMode', 'cooperative');
         $this->RegisterAttributeString('LastOperatingMode', 'cooperative');
         $this->RegisterAttributeString('QTable', json_encode([]));
@@ -69,6 +70,27 @@ class adaptive_HVAC_control extends IPSModule
         } else {
             $this->SetStatus(102);
         }
+    }
+
+    public function GetConfigurationForm()
+    {
+        $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
+
+        $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
+
+        // Find the 'FanStep' element and set its visibility
+        foreach ($form['elements'] as &$element) {
+            if ($element['type'] === 'ExpansionPanel') {
+                foreach ($element['items'] as &$item) {
+                    if (isset($item['name']) && $item['name'] == 'FanStep') {
+                        $item['visible'] = empty($customFanSpeeds);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        return json_encode($form);
     }
 
     public function GetConfigurationForParent()
@@ -363,12 +385,36 @@ class adaptive_HVAC_control extends IPSModule
 
     private function getActionPairs(): array {
         $powerStep = $this->ReadPropertyInteger('PowerStep');
-        $fanStep = $this->ReadPropertyInteger('FanStep');
         if ($powerStep < 10) $powerStep = 10;
-        if ($fanStep < 10) $fanStep = 10;
+
+        $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
+        $fanLevels = [];
+
+        if (!empty($customFanSpeeds)) {
+            $parts = explode(',', $customFanSpeeds);
+            foreach ($parts as $part) {
+                $value = intval(trim($part));
+                if ($value > 0) {
+                    $fanLevels[] = $value;
+                }
+            }
+            $fanLevels = array_unique($fanLevels);
+            sort($fanLevels, SORT_NUMERIC);
+        } else {
+            $fanStep = $this->ReadPropertyInteger('FanStep');
+            if ($fanStep < 10) $fanStep = 10;
+            for ($f = $fanStep; $f <= 100; $f += $fanStep) {
+                $fanLevels[] = $f;
+            }
+        }
+
+        if (empty($fanLevels)) {
+            $fanLevels = [100];
+        }
+
         $actions = ['0:0'];
         for ($p = $powerStep; $p <= 100; $p += $powerStep) {
-            for ($f = $fanStep; $f <= 100; $f += $fanStep) {
+            foreach ($fanLevels as $f) {
                 $actions[] = "{$p}:{$f}";
             }
         }
@@ -377,7 +423,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         return array_unique($actions);
     }
-
+    
     private function getAvailableActions(string $lastAction): array {
         if ($lastAction === '0:0') { return $this->getActionPairs(); }
         list($lastP, $lastF) = array_map('intval', explode(':', $lastAction));
@@ -451,36 +497,35 @@ class adaptive_HVAC_control extends IPSModule
      */
     private function Log(string $message, int $messageLevel): void
     {
-        // Value mapping from the form.json
-        // 1=Error, 2=Warning, 3=Info, 4=Debug
         $configuredLevel = $this->ReadPropertyInteger('LogLevel');
-        if ($configuredLevel === 0) { // 0 is Off
+        if ($configuredLevel === 0) {
             return;
         }
 
         $shouldLog = false;
+        // This logic maps the dropdown values (1-4) to the Symcon constants
         switch ($configuredLevel) {
-            case 4: // Debug: Log everything
-                $shouldLog = true;
+            case 4: // Debug
+                $shouldLog = true; // Log everything at this level
                 break;
-            case 3: // Info: Log Info, Warning, Error
+            case 3: // Info
                 if ($messageLevel === KL_MESSAGE || $messageLevel === KL_WARNING || $messageLevel === KL_ERROR) {
                     $shouldLog = true;
                 }
                 break;
-            case 2: // Warning: Log Warning, Error
+            case 2: // Warning
                 if ($messageLevel === KL_WARNING || $messageLevel === KL_ERROR) {
                     $shouldLog = true;
                 }
                 break;
-            case 1: // Error: Log only Error
+            case 1: // Error
                 if ($messageLevel === KL_ERROR) {
                     $shouldLog = true;
                 }
                 break;
         }
 
-        // KL_DEBUG is a special case and should only be logged if Debug level is selected
+        // KL_DEBUG is a special case and should only ever be logged if Debug level is explicitly selected
         if ($messageLevel === KL_DEBUG && $configuredLevel !== 4) {
             $shouldLog = false;
         }
