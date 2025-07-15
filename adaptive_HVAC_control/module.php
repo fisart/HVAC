@@ -490,4 +490,4 @@ class adaptive_HVAC_control extends IPSModule
             $this->LogMessage($message, KL_MESSAGE);
         }
     }
-}```
+}
