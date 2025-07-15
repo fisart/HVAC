@@ -109,12 +109,9 @@ class adaptive_HVAC_control extends IPSModule
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
         $isCoolingNeeded = false;
         
-        // =====================================================================
-        // === BUG FIX: The logic to determine if cooling is needed must respect the operating mode ===
         $operatingMode = $this->ReadPropertyString('OperatingMode');
 
         if ($operatingMode === 'cooperative') {
-            // In cooperative mode, trust the demand variables from the Zoning Manager.
             foreach ($monitoredRooms as $room) {
                 $demandID = $room['demandID'] ?? 0;
                 if ($demandID > 0 && IPS_VariableExists($demandID) && GetValueInteger($demandID) > 0) {
@@ -123,7 +120,6 @@ class adaptive_HVAC_control extends IPSModule
                 }
             }
         } else {
-            // In standalone mode, check temperatures directly.
             $hysteresis = $this->ReadPropertyFloat('Hysteresis');
             foreach ($monitoredRooms as $room) {
                 $tempID = $room['tempID'] ?? 0;
@@ -136,7 +132,6 @@ class adaptive_HVAC_control extends IPSModule
                 }
             }
         }
-        // =====================================================================
 
         if (!$isCoolingNeeded) {
             $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
@@ -392,19 +387,22 @@ class adaptive_HVAC_control extends IPSModule
         $D_cold = 0.0;
         $hotRoomCount = 0;
         $maxDeviation = 0.0;
+        $isCooperative = ($this->ReadPropertyString('OperatingMode') === 'cooperative');
+
         foreach ($monitoredRooms as $room) {
             $tempID = $room['tempID'] ?? 0;
             $targetID = $room['targetID'] ?? 0;
             $demandID = $room['demandID'] ?? 0;
-            $roomSize = $room['size'] ?? 1;
-            $threshold = $room['threshold'] ?? $this->ReadPropertyFloat('Hysteresis');
 
-            // In cooperative mode, only consider rooms that have an active demand signal.
-            if ($this->ReadPropertyString('OperatingMode') === 'cooperative') {
+            // =====================================================================
+            // === BUG FIX: Enforce a single source of truth ===
+            // In cooperative mode, if the demandID is 0, this room does not exist for the calculation.
+            if ($isCooperative) {
                 if ($demandID == 0 || !IPS_VariableExists($demandID) || GetValueInteger($demandID) == 0) {
                     continue; 
                 }
             }
+            // =====================================================================
 
             if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
                 $temp = GetValue($tempID);
@@ -417,13 +415,14 @@ class adaptive_HVAC_control extends IPSModule
                 if ($deviation < 0) {
                      $D_cold = max($D_cold, -$deviation);
                 }
-                if ($deviation > $threshold) {
+                if ($deviation > ($room['threshold'] ?? $this->ReadPropertyFloat('Hysteresis'))) {
                     $hotRoomCount++;
-                    $weightedDeviationSum += $deviation * $roomSize;
-                    $totalSizeOfHotRooms += $roomSize;
+                    $weightedDeviationSum += $deviation * ($room['size'] ?? 10);
+                    $totalSizeOfHotRooms += ($room['size'] ?? 10);
                 }
             }
         }
+        
         $rawWAD = ($totalSizeOfHotRooms > 0) ? ($weightedDeviationSum / $totalSizeOfHotRooms) : 0.0;
         $dBin = min(5, (int)floor($maxDeviation));
         $cBin = min(5, max(-2, (int)floor($coil - $min)));
