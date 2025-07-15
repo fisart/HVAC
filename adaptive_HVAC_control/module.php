@@ -2,7 +2,7 @@
 /**
  * Adaptive HVAC Control
  *
- * Version: 2.4
+ * Version: 2.5 (Diagnostic Build)
  * Author: Artur Fischer
  */
 
@@ -90,20 +90,17 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
-               // =====================================================================
-        // === NEW TEMPORARY DIAGNOSTIC STEP ===
-        $logLevelReadout = $this->ReadPropertyInteger('LogLevel');
-        $this->LogMessage("DIAGNOSTIC: The configured LogLevel is being read as: " . $logLevelReadout, KL_ERROR);
-        // === END DIAGNOSTIC STEP ===
- 
         $logLevel = $this->ReadPropertyInteger('LogLevel');
 
         if ($logLevel >= KL_DEBUG) {
-            $this->LogMessage('Timer called, starting logic.', KL_MESSAGE);
+            $this->LogMessage('✔️ ProcessCoolingLogic started. LogLevel is ' . $logLevel . '.', KL_MESSAGE);
         }
 
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
+            if ($logLevel >= KL_DEBUG) {
+                $this->LogMessage('❌ EXIT: Manual override is active.', KL_MESSAGE);
+            }
             return;
         }
 
@@ -116,13 +113,16 @@ class adaptive_HVAC_control extends IPSModule
         if ($acActiveID === 0 || !IPS_VariableExists($acActiveID)) {
             $this->SetStatus(104);
             if ($logLevel >= KL_ERROR) {
-                $this->LogMessage('Exiting: AC Active Link is not configured or missing.', KL_MESSAGE);
+                $this->LogMessage('❌ EXIT: AC Active Link is not configured or missing.', KL_MESSAGE);
             }
             return;
         }
         
         if (!GetValue($acActiveID)) {
             $this->SetStatus(201);
+            if ($logLevel >= KL_DEBUG) {
+                $this->LogMessage('❌ EXIT: AC system is not active (linked variable is false).', KL_MESSAGE);
+            }
             if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
             if ($fanOutputID > 0 && IPS_VariableExists($fanOutputID)) RequestAction($fanOutputID, 0);
             return;
@@ -157,7 +157,7 @@ class adaptive_HVAC_control extends IPSModule
 
         if (!$isCoolingNeeded) {
             if ($logLevel >= KL_MESSAGE) {
-                $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
+                $this->LogMessage('❌ EXIT: No rooms require cooling. Setting output to 0.', KL_MESSAGE);
             }
             if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
             if ($fanOutputID > 0 && IPS_VariableExists($fanOutputID)) RequestAction($fanOutputID, 0);
@@ -168,9 +168,13 @@ class adaptive_HVAC_control extends IPSModule
         if ($powerOutputID === 0 || !IPS_VariableExists($powerOutputID) || $fanOutputID === 0 || !IPS_VariableExists($fanOutputID) || $coilTempID === 0 || !IPS_VariableExists($coilTempID) || $minCoilTempID === 0 || !IPS_VariableExists($minCoilTempID)) {
              $this->SetStatus(104);
              if ($logLevel >= KL_ERROR) {
-                $this->LogMessage('Exiting: One or more core links (Power, Fan, Coil Temps) are not configured or missing.', KL_MESSAGE);
+                $this->LogMessage('❌ EXIT: One or more core links (Power, Fan, Coil Temps) are not configured or missing.', KL_MESSAGE);
              }
              return;
+        }
+
+        if ($logLevel >= KL_DEBUG) {
+            $this->LogMessage('✔️ All checks passed. Proceeding with Q-Learning logic.', KL_MESSAGE);
         }
 
         $this->SetStatus(102);
@@ -361,13 +365,14 @@ class adaptive_HVAC_control extends IPSModule
     }
     
     private function choose(array &$Q, float $epsilon, string $lastAction, string $state): string {
+        $logLevel = $this->ReadPropertyInteger('LogLevel');
         $actions = $this->getActionPairs();
         if (!isset($Q[$state])) {
             $Q[$state] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
         }
         $availableActions = $this->getAvailableActions($lastAction);
         if ((mt_rand() / mt_getrandmax()) < $epsilon) {
-            if ($this->ReadPropertyInteger('LogLevel') >= KL_DEBUG) {
+            if ($logLevel >= KL_DEBUG) {
                 $this->LogMessage('Exploring with random action.', KL_MESSAGE);
             }
             return $availableActions[array_rand($availableActions)];
@@ -377,7 +382,7 @@ class adaptive_HVAC_control extends IPSModule
         $maxV = max($qValuesForAvailable);
         $bestActions = array_keys($qValuesForAvailable, $maxV);
         $chosenAction = $bestActions[array_rand($bestActions)];
-        if ($this->ReadPropertyInteger('LogLevel') >= KL_DEBUG) {
+        if ($logLevel >= KL_DEBUG) {
             $this->LogMessage(sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), KL_MESSAGE);
         }
         return $chosenAction;
