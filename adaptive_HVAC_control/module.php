@@ -90,6 +90,12 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
+               // =====================================================================
+        // === NEW TEMPORARY DIAGNOSTIC STEP ===
+        $logLevelReadout = $this->ReadPropertyInteger('LogLevel');
+        $this->LogMessage("DIAGNOSTIC: The configured LogLevel is being read as: " . $logLevelReadout, KL_ERROR);
+        // === END DIAGNOSTIC STEP ===
+ 
         $logLevel = $this->ReadPropertyInteger('LogLevel');
 
         if ($logLevel >= KL_DEBUG) {
