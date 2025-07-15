@@ -1,4 +1,10 @@
 <?php
+/**
+ * Adaptive HVAC Control
+ *
+ * Version: 2.2
+ * Author: Artur Fischer
+ */
 
 class adaptive_HVAC_control extends IPSModule
 {
@@ -8,6 +14,7 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::Create();
         $this->RegisterPropertyBoolean('ManualOverride', false);
+        $this->RegisterPropertyInteger('LogLevel', 3);
         $this->RegisterPropertyFloat('Alpha', 0.05);
         $this->RegisterPropertyFloat('Gamma', 0.9);
         $this->RegisterPropertyFloat('DecayRate', 0.005);
@@ -45,7 +52,7 @@ class adaptive_HVAC_control extends IPSModule
         $lastMode = $this->ReadAttributeString('LastOperatingMode');
 
         if ($lastMode !== '' && $currentMode !== $lastMode) {
-            $this->LogMessage(
+            $this->Log(
                 'Operating Mode has been changed. The Q-Table state definition has changed. ' .
                 'It is STRONGLY recommended to use the "Reset Learning" button to clear the Q-Table.',
                 KL_WARNING
@@ -81,7 +88,7 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
-        $this->LogMessage('Timer called, starting logic.', KL_MESSAGE);
+        $this->Log('Timer called, starting logic.', KL_DEBUG);
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
             return;
@@ -95,7 +102,7 @@ class adaptive_HVAC_control extends IPSModule
 
         if ($acActiveID === 0 || !IPS_VariableExists($acActiveID)) {
             $this->SetStatus(104);
-            $this->LogMessage('Exiting: AC Active Link is not configured or missing.', KL_ERROR);
+            $this->Log('Exiting: AC Active Link is not configured or missing.', KL_ERROR);
             return;
         }
         
@@ -134,7 +141,7 @@ class adaptive_HVAC_control extends IPSModule
         }
 
         if (!$isCoolingNeeded) {
-            $this->LogMessage('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
+            $this->Log('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
             if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
             if ($fanOutputID > 0 && IPS_VariableExists($fanOutputID)) RequestAction($fanOutputID, 0);
             $this->SetStatus(102);
@@ -143,7 +150,7 @@ class adaptive_HVAC_control extends IPSModule
         
         if ($powerOutputID === 0 || !IPS_VariableExists($powerOutputID) || $fanOutputID === 0 || !IPS_VariableExists($fanOutputID) || $coilTempID === 0 || !IPS_VariableExists($coilTempID) || $minCoilTempID === 0 || !IPS_VariableExists($minCoilTempID)) {
              $this->SetStatus(104);
-             $this->LogMessage('Exiting: One or more core links (Power, Fan, Coil Temps) are not configured or missing.', KL_ERROR);
+             $this->Log('Exiting: One or more core links (Power, Fan, Coil Temps) are not configured or missing.', KL_ERROR);
              return;
         }
 
@@ -202,7 +209,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->SetValue("QTableJSON", json_encode($Q, JSON_PRETTY_PRINT));
         $this->UpdateVisualization();
-        $this->LogMessage("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_MESSAGE);
+        $this->Log("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_MESSAGE);
     }
 
     public function ResetLearning() {
@@ -212,7 +219,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->SetValue("CurrentEpsilon", 0.4);
         $this->SetValue("QTableJSON", '{}');
         $this->UpdateVisualization();
-        $this->LogMessage('Learning has been reset by the user.', KL_MESSAGE);
+        $this->Log('Learning has been reset by the user.', KL_MESSAGE);
         if ($_IPS['SENDER'] == 'WebFront') {
             echo "Learning has been reset!";
         }
@@ -228,7 +235,7 @@ class adaptive_HVAC_control extends IPSModule
     private function GenerateQTableHTML(): string {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($qTable) || empty($qTable)) {
-            $this->LogMessage('GenerateQTableHTML: Q-Table is empty.', KL_MESSAGE);
+            $this->Log('GenerateQTableHTML: Q-Table is empty.', KL_DEBUG);
             return '<p>Q-Table is empty. Run the learning process to populate it.</p>';
         }
         ksort($qTable);
@@ -335,13 +342,16 @@ class adaptive_HVAC_control extends IPSModule
         }
         $availableActions = $this->getAvailableActions($lastAction);
         if ((mt_rand() / mt_getrandmax()) < $epsilon) {
+            $this->Log('Exploring with random action.', KL_DEBUG);
             return $availableActions[array_rand($availableActions)];
         }
         $qValuesForAvailable = array_intersect_key($Q[$state], array_flip($availableActions));
         if (empty($qValuesForAvailable)) return $lastAction;
         $maxV = max($qValuesForAvailable);
         $bestActions = array_keys($qValuesForAvailable, $maxV);
-        return $bestActions[array_rand($bestActions)];
+        $chosenAction = $bestActions[array_rand($bestActions)];
+        $this->Log(sprintf('Exploiting best action: %s (Q-Value: %.2f)', $chosenAction, $maxV), KL_DEBUG);
+        return $chosenAction;
     }
 
     private function decayEpsilon() {
@@ -394,15 +404,11 @@ class adaptive_HVAC_control extends IPSModule
             $targetID = $room['targetID'] ?? 0;
             $demandID = $room['demandID'] ?? 0;
 
-            // =====================================================================
-            // === BUG FIX: Enforce a single source of truth ===
-            // In cooperative mode, if the demandID is 0, this room does not exist for the calculation.
             if ($isCooperative) {
                 if ($demandID == 0 || !IPS_VariableExists($demandID) || GetValueInteger($demandID) == 0) {
                     continue; 
                 }
             }
-            // =====================================================================
 
             if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
                 $temp = GetValue($tempID);
@@ -435,5 +441,20 @@ class adaptive_HVAC_control extends IPSModule
         $delta = $currentCoil - $previousCoil;
         if ($delta < -0.2) { return -1; } elseif ($delta > 0.2) { return 1; }
         return 0;
+    }
+
+    /**
+     * Helper function for conditional logging.
+     * @param string $message The message to log.
+     * @param int $messageLevel The severity level of the message (KL_ERROR, KL_WARNING, KL_MESSAGE, KL_DEBUG).
+     */
+    private function Log(string $message, int $messageLevel): void
+    {
+        $configuredLevel = $this->ReadPropertyInteger('LogLevel');
+        // Log if configured level is higher or equal to the message level
+        if ($configuredLevel >= $messageLevel && $configuredLevel > 0) {
+            // Adhere to the high-priority instruction to ALWAYS log as KL_MESSAGE type
+            $this->LogMessage($message, KL_MESSAGE);
+        }
     }
 }
