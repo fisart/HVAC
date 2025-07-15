@@ -88,6 +88,11 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessCoolingLogic()
     {
+         // =====================================================================
+        // === TEMPORARY DIAGNOSTIC LINE ===
+        $this->LogMessage('FORCED LOG: ProcessCoolingLogic function was executed.', KL_MESSAGE);
+        // =====================================================================
+
         $this->Log('Timer called, starting logic.', KL_DEBUG);
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->SetStatus(200);
