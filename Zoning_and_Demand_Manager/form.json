@@ -1,71 +1,40 @@
 {
     "elements": [
-        { 
-            "type": "ExpansionPanel", 
-            "caption": "Help & Documentation",
-            "items": [
-                { "type": "Label", "caption": "doc_intro" },
-                { "type": "Label", "caption": " " },
-                { "type": "Label", "caption": "doc_h_general", "bold": true },
-                { "type": "Label", "caption": "doc_t_opmode", "bold": true },
-                { "type": "Label", "caption": "doc_d_opmode" },
-                { "type": "Label", "caption": "doc_t_debug", "bold": true },
-                { "type": "Label", "caption": "doc_d_debug" },
-                { "type": "Label", "caption": "doc_t_timer", "bold": true },
-                { "type": "Label", "caption": "doc_d_timer" },
-                { "type": "Label", "caption": " " },
-                { "type": "Label", "caption": "doc_h_overrides", "bold": true },
-                { "type": "Label", "caption": "doc_t_heating", "bold": true },
-                { "type": "Label", "caption": "doc_d_heating" },
-                { "type": "Label", "caption": "doc_t_fan", "bold": true },
-                { "type": "Label", "caption": "doc_d_fan" },
-                { "type": "Label", "caption": "doc_t_ac", "bold": true },
-                { "type": "Label", "caption": "doc_d_ac" },
-                { "type": "Label", "caption": " " },
-                { "type": "Label", "caption": "doc_h_standalone", "bold": true },
-                { "type": "Label", "caption": "doc_t_stapowerlink", "bold": true },
-                { "type": "Label", "caption": "doc_d_stapowerlink" },
-                { "type": "Label", "caption": "doc_t_stafanlink", "bold": true },
-                { "type": "Label", "caption": "doc_d_stafanlink" },
-                { "type": "Label", "caption": "doc_t_stapowerval", "bold": true },
-                { "type": "Label", "caption": "doc_d_stapowerval" },
-                { "type": "Label", "caption": "doc_t_stafanval", "bold": true },
-                { "type": "Label", "caption": "doc_d_stafanval" },
-                { "type": "Label", "caption": " " },
-                { "type": "Label", "caption": "doc_h_rooms", "bold": true },
-                { "type": "Label", "caption": "doc_t_r_demand", "bold": true },
-                { "type": "Label", "caption": "doc_d_r_demand" }
-            ]
-        },
+        { "type": "CheckBox", "name": "StandaloneMode", "caption": "Run in Standalone Mode" },
+        { "type": "Label", "label": "If unchecked, runs in Adaptive Mode. If checked, uses fixed values below." },
         { "type": "Label", "label": " " },
-        { 
-            "type": "Select", 
-            "name": "OperatingMode", 
-            "caption": "Operating Mode",
-            "options": [
-                { "label": "Adaptive Mode (Controls the Adaptive Cooling module)", "value": "adaptive" },
-                { "label": "Standalone Mode (Uses fixed Power/Fan values)", "value": "standalone" }
-            ],
-            "defaultValue": "adaptive"
-        },
         { "type": "CheckBox", "name": "Debug", "caption": "Enable Debug Logging" },
         { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "defaultValue": 60 },
+        { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Global Hysteresis", "suffix": "°", "defaultValue": 0.5 },
         { "type": "Label", "label": " " },
         { "type": "Label", "label": "--- System-Wide Controls ---" },
         { "type": "SelectVariable", "name": "HeatingActiveLink", "caption": "Heating Active Link (disables cooling)" },
-        { "type": "SelectVariable", "name": "MainACOnOffLink", "caption": "Main AC Unit (On/Off)" },
-        { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Control (On/Off)" },
+        { "type": "SelectVariable", "name": "VentilationActiveLink", "caption": "Ventilation Active Link (disables cooling)" },
+        { "type": "SelectVariable", "name": "MainACOnOffLink", "caption": "Main AC Unit Variable" },
+        { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Variable" },
+        { "type": "SelectVariable", "name": "MasterBedSpecialModeLink", "caption": "Master Bedroom Special Mode Link" },
+        { "type": "SelectVariable", "name": "MainStatusTextLink", "caption": "System Status Text Variable" },
         { "type": "Label", "label": " " },
         {
-            "type": "ExpansionPanel",
-            "caption": "Standalone Mode Settings",
-            "visible": "this.OperatingMode == 'standalone'",
-            "items": [
-                { "type": "SelectVariable", "name": "StandalonePowerLink", "caption": "AC Power Variable" },
-                { "type": "SelectVariable", "name": "StandaloneFanLink", "caption": "AC Fan Speed Variable" },
-                { "type": "NumberSpinner", "name": "StandalonePowerValue", "caption": "Fixed Power Value", "suffix": "%", "defaultValue": 80 },
-                { "type": "NumberSpinner", "name": "StandaloneFanValue", "caption": "Fixed Fan Speed Value", "suffix": "%", "defaultValue": 80 }
-            ]
+            "type": "Label",
+            "label": "--- Standalone Mode Settings ---",
+            "visible": "this.StandaloneMode"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "ConstantPower",
+            "caption": "Fixed Power Value",
+            "suffix": "%",
+            "defaultValue": 80,
+            "visible": "this.StandaloneMode"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "ConstantFanSpeed",
+            "caption": "Fixed Fan Speed Value",
+            "suffix": "%",
+            "defaultValue": 80,
+            "visible": "this.StandaloneMode"
         },
         { "type": "Label", "label": " " },
         {
@@ -79,7 +48,7 @@
                 { "caption": "Room Name", "name": "name", "width": "150px", "add": "New Room", "edit": { "type": "ValidationTextBox" } },
                 { "caption": "Temp Sensor", "name": "tempID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
                 { "caption": "Target Temp", "name": "targetID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Demand Variable", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" }, "visible": "this.OperatingMode == 'adaptive'" },
+                { "caption": "Demand Variable", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" }, "visible": "!this.StandaloneMode" },
                 { "caption": "Flap Control", "name": "flapID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
                 { "caption": "Flap Type", "name": "flapType", "width": "120px", "add": "boolean", "edit": { "type": "Select", "options": [{"label": "Boolean", "value": "boolean"}, {"label": "Linear", "value": "linear"}] } },
                 { "caption": "Value OPEN", "name": "flapOpenValue", "width": "100px", "add": "true", "edit": { "type": "ValidationTextBox" } },
