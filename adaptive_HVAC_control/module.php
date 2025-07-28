@@ -247,7 +247,46 @@ class adaptive_HVAC_control extends IPSModule
             echo "Learning has been reset!";
         }
     }
+    // --- NEW PUBLIC FUNCTIONS FOR DATA EXPORT/IMPORT ---
 
+    /**
+     * Exports the module's internal state (attributes) as a JSON string.
+     * @return string
+     */
+    public function ExportState(): string
+    {
+        $stateData = [
+            'QTable'   => $this->ReadAttributeString('QTable'),
+            'MetaData' => $this->ReadAttributeString('MetaData'),
+            'Epsilon'  => $this->ReadAttributeFloat('Epsilon')
+        ];
+        return json_encode($stateData);
+    }
+
+    /**
+     * Imports the module's internal state from a JSON string.
+     * @param string $StateJSON The JSON string exported from another instance.
+     */
+    public function ImportState(string $StateJSON)
+    {
+        $stateData = json_decode($StateJSON, true);
+        if (is_array($stateData)) {
+            if (isset($stateData['QTable'])) {
+                $this->WriteAttributeString('QTable', $stateData['QTable']);
+            }
+            if (isset($stateData['MetaData'])) {
+                $this->WriteAttributeString('MetaData', $stateData['MetaData']);
+            }
+            if (isset($stateData['Epsilon'])) {
+                $this->WriteAttributeFloat('Epsilon', $stateData['Epsilon']);
+            }
+            $this->LogMessage("State successfully imported.", KL_MESSAGE);
+            // Apply changes to update status variables
+            $this->ApplyChanges();
+        } else {
+            $this->LogMessage("Failed to import state: Invalid JSON provided.", KL_ERROR);
+        }
+    }
     public function UpdateVisualization() {
         $this->SetValue("QTableHTML", $this->GenerateQTableHTML());
         if ($_IPS['SENDER'] == 'WebFront') {
