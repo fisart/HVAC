@@ -1,4 +1,33 @@
 <?php
+/**
+ * @file          module.php
+ * @author        Artur Fischer (Original Concept), Symcon Module Specialist (Refinement)
+ * @version       2.5
+ * @date          2023-10-27
+ *
+ * @brief         Zoning & Demand Manager for multi-zone HVAC systems.
+ *
+ * This module is the master rule engine for a multi-zone HVAC system.
+ * It operates in two modes:
+ * 1.  Adaptive Mode: Determines which rooms need cooling and sets a "demand"
+ *     variable for each. It then turns the main AC system on or off, allowing a
+ *     separate "Adaptive Cooling Controller" module to determine the optimal
+ *     power and fan speed.
+ * 2.  Standalone Mode: Acts as a powerful rule-based thermostat. When cooling
+ *     is needed, it turns on the AC system and sets a user-defined, fixed
+ *     power and fan speed.
+ *
+ * Key Features:
+ * -   Controls individual room flaps based on target temperature, window status,
+ *     and user-defined cooling modes (ON, OFF, AUTO).
+ * -   System-wide overrides to disable cooling when heating or ventilation is active.
+ * -   Special mode for master bedroom ventilation.
+ * -   Supports both boolean (On/Off) and linear (0-100%) flap actuators.
+ * -   Uses a configurable hysteresis value for temperature checks.
+ * -   Robustly checks for open windows/doors via a category of links.
+ * -   Avoids error suppression for stable and debuggable operation.
+ *
+ */
 
 class Zoning_and_Demand_Manager extends IPSModule
 {
@@ -128,21 +157,18 @@ class Zoning_and_Demand_Manager extends IPSModule
             return false;
         }
         foreach (IPS_GetChildrenIDs($catID) as $childID) {
-            if (IPS_VariableExists($childID) && GetValue($childID)) {
+            // Preferred method: Check for a Link to a sensor
+            if (IPS_LinkExists($childID)) {
+                $linkInfo = IPS_GetLink($childID);
+                $targetID = $linkInfo['TargetID'];
+                if (IPS_VariableExists($targetID) && GetValue($targetID)) {
+                    return true;
+                }
+            }
+            // Fallback for direct variables in the category
+            else if (IPS_VariableExists($childID) && GetValue($childID)) {
                 return true;
             }
-        }
-        return false;
-    }
-
-    private function IsRoomTooCold(array $roomConfig): bool {
-        $tempID = $roomConfig['tempID'] ?? 0;
-        $targetID = $roomConfig['targetID'] ?? 0;
-        if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
-            $temp = GetValueFloat($tempID);
-            $target = GetValueFloat($targetID);
-            $hysteresis = $this->ReadPropertyFloat('Hysteresis');
-            return $temp <= ($target - $hysteresis);
         }
         return false;
     }
@@ -153,7 +179,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
             $temp = GetValueFloat($tempID);
             $target = GetValueFloat($targetID);
-            $hysteresis = $this->ReadPropertyFloat('Hysteresis');
+            $hysteresis = $this->ReadPropertyFloat('Hysteresis'); // Use configurable property
             return $temp > ($target + $hysteresis);
         }
         return false;
@@ -170,7 +196,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->SetDemandState($roomConfig['demandID'], 0);
         $this->SetCoolingPhaseInfo($roomConfig['coolingPhaseInfoID'], $phaseInfo);
     }
-
+    
     private function SetFlapState(array $roomConfig, bool $shouldBeOpen) {
         $flapID = $roomConfig['flapID'] ?? 0;
         if ($flapID <= 0 || !IPS_VariableExists($flapID)) return;
@@ -178,14 +204,19 @@ class Zoning_and_Demand_Manager extends IPSModule
         $openValue = $roomConfig['flapOpenValue'] ?? 'true';
         $closedValue = $roomConfig['flapClosedValue'] ?? 'false';
         $valueToSet = $shouldBeOpen ? $openValue : $closedValue;
+        $currentValue = GetValue($flapID);
         if ($flapType == 'boolean') {
-            $valueToSet = (strtolower((string)$valueToSet) === 'true');
-        } else {
-            $valueToSet = intval($valueToSet);
-        }
-        if (GetValue($flapID) != $valueToSet) {
-            RequestAction($flapID, $valueToSet);
-            if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("Setting flap for '{$roomConfig['name']}' to " . ($shouldBeOpen ? "OPEN" : "CLOSED"), KL_MESSAGE);
+            $targetValue = (strtolower((string)$valueToSet) === 'true');
+            if ($currentValue != $targetValue) {
+                RequestAction($flapID, $targetValue);
+                if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("Setting boolean flap for '{$roomConfig['name']}' to " . ($shouldBeOpen ? "OPEN" : "CLOSED"), KL_MESSAGE);
+            }
+        } else { // Assumes 'linear'
+            $targetValue = intval($valueToSet);
+            if ($currentValue != $targetValue) {
+                RequestAction($flapID, $targetValue);
+                if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("Setting linear flap for '{$roomConfig['name']}' to value {$targetValue} (" . ($shouldBeOpen ? "OPEN" : "CLOSED") . ")", KL_MESSAGE);
+            }
         }
     }
 
@@ -228,33 +259,44 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
     }
 
-    private function SwitchSystemOn() {
+    private function SetAcState(bool $on) {
         $acID = $this->ReadPropertyInteger('MainACOnOffLink');
-        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
-        $mode = $this->ReadPropertyBoolean('StandaloneMode') ? "Standalone" : "Adaptive";
-        $this->LogMessage("Main AC System switched ON. Mode: {$mode}.", KL_MESSAGE);
+        if ($acID <= 0 || !IPS_VariableExists($acID)) return;
 
         if ($this->ReadPropertyBoolean('StandaloneMode')) {
-            $powerValue = $this->ReadPropertyInteger('ConstantPower');
-            $fanValue = $this->ReadPropertyInteger('ConstantFanSpeed');
-            if ($acID > 0) RequestAction($acID, $powerValue);
-            if ($fanID > 0) RequestAction($fanID, $fanValue);
+            $value = $on ? $this->ReadPropertyInteger('ConstantPower') : 0;
+            RequestAction($acID, $value);
         } else {
-            if ($acID > 0) RequestAction($acID, true);
-            if ($fanID > 0) RequestAction($fanID, true);
+            RequestAction($acID, $on);
+        }
+    }
+    
+    private function SetFanState(bool $on) {
+        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
+        if ($fanID <= 0 || !IPS_VariableExists($fanID)) return;
+        
+        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+            $value = $on ? $this->ReadPropertyInteger('ConstantFanSpeed') : 0;
+            RequestAction($fanID, $value);
+        } else {
+            RequestAction($fanID, $on);
         }
     }
 
+    private function SwitchSystemOn() {
+        $this->SetAcState(true);
+        $this->SetFanState(true);
+        $mode = $this->ReadPropertyBoolean('StandaloneMode') ? "Standalone" : "Adaptive";
+        $this->LogMessage("Main AC System switched ON. Mode: {$mode}.", KL_MESSAGE);
+    }
+
     private function SwitchSystemOff() {
-        $acID = $this->ReadPropertyInteger('MainACOnOffLink');
-        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
-        if ($acID > 0) RequestAction($acID, false);
-        if ($fanID > 0) RequestAction($fanID, false);
+        $this->SetAcState(false);
+        $this->SetFanState(false);
         $this->LogMessage("Main AC System switched OFF.", KL_MESSAGE);
     }
     
     private function SwitchFan(bool $state) {
-        $fanID = $this->ReadPropertyInteger('MainFanControlLink');
-        if ($fanID > 0) RequestAction($fanID, $state);
+        $this->SetFanState($state);
     }
 }
