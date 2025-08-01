@@ -2,8 +2,9 @@
 /**
  * Adaptive HVAC Control
  *
- * Version: 2.7 (Custom Fan Speeds)
+ * Version: 2.8 (Custom Power Levels & Advanced Energy Model)
  * Author: Artur Fischer
+ * Co-Author / Review: AI Consultant
  */
 
 class adaptive_HVAC_control extends IPSModule
@@ -15,9 +16,9 @@ class adaptive_HVAC_control extends IPSModule
         parent::Create();
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyInteger('LogLevel', 3);
-        $this->RegisterPropertyFloat('Alpha', 0.05);
+        $this->RegisterPropertyFloat('Alpha', 0.1); // Recommended: 0.1 for learning phase
         $this->RegisterPropertyFloat('Gamma', 0.9);
-        $this->RegisterPropertyFloat('DecayRate', 0.005);
+        $this->RegisterPropertyFloat('DecayRate', 0.001); // Recommended: 0.001 for longer exploration
         $this->RegisterPropertyFloat('Hysteresis', 0.5);
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
@@ -28,13 +29,18 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('MinCoilTempLink', 0);
         $this->RegisterPropertyString('MonitoredRooms', '[]');
         $this->RegisterPropertyInteger('TimerInterval', 120);
+
+        // Deprecated property, kept for backwards compatibility but hidden by form.json
         $this->RegisterPropertyInteger('PowerStep', 20);
+        // NEW: Property for discrete, optimized power levels
+        $this->RegisterPropertyString('CustomPowerLevels', '30,55,75,100');
+
         $this->RegisterPropertyInteger('FanStep', 20);
         $this->RegisterPropertyString('CustomFanSpeeds', '');
         $this->RegisterPropertyString('OperatingMode', 'cooperative');
         $this->RegisterAttributeString('LastOperatingMode', 'cooperative');
         $this->RegisterAttributeString('QTable', json_encode([]));
-        $this->RegisterAttributeFloat('Epsilon', 0.3);
+        $this->RegisterAttributeFloat('Epsilon', 0.4); // Start high for learning
         $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
         $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
         $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
@@ -76,11 +82,19 @@ class adaptive_HVAC_control extends IPSModule
     {
         $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
 
-        $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
-
-        // Find the 'FanStep' element and set its visibility
+        // Hide old PowerStep if CustomPowerLevels is used
+        $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
         foreach ($form['elements'] as &$element) {
-            if ($element['type'] === 'ExpansionPanel') {
+            if (isset($element['name']) && $element['name'] == 'PowerStep') {
+                $element['visible'] = empty($customPowerLevels);
+                break;
+            }
+        }
+        
+        // Hide FanStep if CustomFanSpeeds is used
+        $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
+        foreach ($form['elements'] as &$element) {
+             if ($element['type'] === 'ExpansionPanel') {
                 foreach ($element['items'] as &$item) {
                     if (isset($item['name']) && $item['name'] == 'FanStep') {
                         $item['visible'] = empty($customFanSpeeds);
@@ -204,10 +218,11 @@ class adaptive_HVAC_control extends IPSModule
             $state = "$dBin|$cBin|$coilTrendBin|$hotRoomCountBin";
         }
         
+        list($prevP, $prevF) = explode(':', $prevAction);
+        
         $r_progress = $prev_WAD - $rawWAD;
         $r_freeze = -max(0, $minCoil - $coilState) * 2;
-        list($prevP, $prevF) = explode(':', $prevAction);
-        $r_energy = -0.01 * (intval($prevP) + intval($prevF));
+        $r_energy = $this->calculateEnergyReward(intval($prevP), intval($prevF));
         $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
         
         if ($prevState !== null && $prevTs !== null) {
@@ -247,46 +262,37 @@ class adaptive_HVAC_control extends IPSModule
             echo "Learning has been reset!";
         }
     }
-    // --- NEW PUBLIC FUNCTIONS FOR DATA EXPORT/IMPORT ---
 
-    /**
-     * Exports the module's internal state (attributes) as a JSON string.
-     * @return string
-     */
     public function ExportState(): string
     {
         $stateData = [
             'QTable'   => $this->ReadAttributeString('QTable'),
-            'MetaData' => $this->ReadAttributeString('MetaData'),
+            'MetaData' => json_decode($this->GetBuffer('MetaData')), // Use GetBuffer for MetaData
             'Epsilon'  => $this->ReadAttributeFloat('Epsilon')
         ];
         return json_encode($stateData);
     }
 
-    /**
-     * Imports the module's internal state from a JSON string.
-     * @param string $StateJSON The JSON string exported from another instance.
-     */
     public function ImportState(string $StateJSON)
     {
         $stateData = json_decode($StateJSON, true);
         if (is_array($stateData)) {
             if (isset($stateData['QTable'])) {
-                $this->WriteAttributeString('QTable', $stateData['QTable']);
+                $this->WriteAttributeString('QTable', is_string($stateData['QTable']) ? $stateData['QTable'] : json_encode($stateData['QTable']));
             }
             if (isset($stateData['MetaData'])) {
-                $this->WriteAttributeString('MetaData', $stateData['MetaData']);
+                $this->SetBuffer('MetaData', is_string($stateData['MetaData']) ? $stateData['MetaData'] : json_encode($stateData['MetaData']));
             }
             if (isset($stateData['Epsilon'])) {
                 $this->WriteAttributeFloat('Epsilon', $stateData['Epsilon']);
             }
             $this->LogMessage("State successfully imported.", KL_MESSAGE);
-            // Apply changes to update status variables
             $this->ApplyChanges();
         } else {
             $this->LogMessage("Failed to import state: Invalid JSON provided.", KL_ERROR);
         }
     }
+    
     public function UpdateVisualization() {
         $this->SetValue("QTableHTML", $this->GenerateQTableHTML());
         if ($_IPS['SENDER'] == 'WebFront') {
@@ -423,17 +429,39 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     private function getActionPairs(): array {
-        $powerStep = $this->ReadPropertyInteger('PowerStep');
-        if ($powerStep < 10) $powerStep = 10;
+        // --- Power Levels ---
+        $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
+        $powerLevels = [];
+        if (!empty(trim($customPowerLevels))) {
+            $parts = explode(',', $customPowerLevels);
+            foreach ($parts as $part) {
+                $value = intval(trim($part));
+                if ($value > 0 && $value <= 100) {
+                    $powerLevels[] = $value;
+                }
+            }
+            $powerLevels = array_unique($powerLevels);
+            sort($powerLevels, SORT_NUMERIC);
+        } else {
+            // Fallback to old PowerStep logic
+            $powerStep = $this->ReadPropertyInteger('PowerStep');
+            if ($powerStep < 10) $powerStep = 10;
+            for ($p = $powerStep; $p <= 100; $p += $powerStep) {
+                $powerLevels[] = $p;
+            }
+        }
+        if (empty($powerLevels)) {
+            $powerLevels = [100]; // Safety fallback
+        }
 
+        // --- Fan Levels ---
         $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
         $fanLevels = [];
-
-        if (!empty($customFanSpeeds)) {
+        if (!empty(trim($customFanSpeeds))) {
             $parts = explode(',', $customFanSpeeds);
             foreach ($parts as $part) {
                 $value = intval(trim($part));
-                if ($value > 0) {
+                if ($value > 0 && $value <= 100) {
                     $fanLevels[] = $value;
                 }
             }
@@ -446,17 +474,18 @@ class adaptive_HVAC_control extends IPSModule
                 $fanLevels[] = $f;
             }
         }
-
         if (empty($fanLevels)) {
-            $fanLevels = [100];
+            $fanLevels = [100]; // Safety fallback
         }
 
+        // --- Combine ---
         $actions = ['0:0'];
-        for ($p = $powerStep; $p <= 100; $p += $powerStep) {
+        foreach ($powerLevels as $p) {
             foreach ($fanLevels as $f) {
                 $actions[] = "{$p}:{$f}";
             }
         }
+
         if (!in_array("100:100", $actions)) {
             $actions[] = "100:100";
         }
@@ -528,12 +557,45 @@ class adaptive_HVAC_control extends IPSModule
         if ($delta < -0.2) { return -1; } elseif ($delta > 0.2) { return 1; }
         return 0;
     }
-
+    
     /**
-     * Helper function for conditional logging, using the correct constant values.
-     * @param string $message The message to log.
-     * @param int $messageLevel The severity level of the message (KL_ERROR, KL_WARNING, etc.).
+     * Calculates a realistic energy penalty based on non-linear hardware characteristics.
+     * @param int $power The compressor power setting (0-100).
+     * @param int $fan The fan speed setting (0-100).
+     * @return float The negative reward (penalty) for energy consumption.
      */
+    private function calculateEnergyReward(int $power, int $fan): float
+    {
+        if ($power == 0 && $fan == 0) {
+            return 0.0;
+        }
+
+        // Normalize power and fan values to a 0.0 to 1.0 scale
+        $p_norm = $power / 100.0;
+        $f_norm = $fan / 100.0;
+
+        // Part 1: Power (Compressor) Penalty
+        // Models the U-shaped efficiency curve of an inverter.
+        // Penalizes very low (<25%) and very high (>80%) power settings more heavily.
+        // The "sweet spot" is modeled to be around 40-60%.
+        // The formula creates a parabola with its minimum at 50% power.
+        $power_penalty = (0.4 * $p_norm) + (0.6 * pow($p_norm - 0.5, 2));
+
+        // Part 2: Fan Penalty
+        // Models the fan's cubic power law. High fan speeds are very costly.
+        // pow($f_norm, 3) means 100% fan is 8x more costly than 50% fan.
+        $fan_penalty = pow($f_norm, 3);
+
+        // Part 3: Combine and Scale
+        // Combine penalties. The compressor is the main consumer, so it gets a higher weight.
+        $total_penalty = 0.6 * $power_penalty + 0.4 * $fan_penalty;
+
+        // Part 4: Final Reward Scaling
+        // Scale the final penalty to be in a similar magnitude to other rewards.
+        // This factor may need tuning based on observation.
+        return -0.05 * $total_penalty;
+    }
+
     private function Log(string $message, int $messageLevel): void
     {
         $configuredLevel = $this->ReadPropertyInteger('LogLevel');
@@ -542,35 +604,18 @@ class adaptive_HVAC_control extends IPSModule
         }
 
         $shouldLog = false;
-        // This logic maps the dropdown values (1-4) to the Symcon constants
         switch ($configuredLevel) {
-            case 4: // Debug
-                $shouldLog = true; // Log everything at this level
-                break;
-            case 3: // Info
-                if ($messageLevel === KL_MESSAGE || $messageLevel === KL_WARNING || $messageLevel === KL_ERROR) {
-                    $shouldLog = true;
-                }
-                break;
-            case 2: // Warning
-                if ($messageLevel === KL_WARNING || $messageLevel === KL_ERROR) {
-                    $shouldLog = true;
-                }
-                break;
-            case 1: // Error
-                if ($messageLevel === KL_ERROR) {
-                    $shouldLog = true;
-                }
-                break;
+            case 4: $shouldLog = true; break; // Debug
+            case 3: if (in_array($messageLevel, [KL_MESSAGE, KL_WARNING, KL_ERROR])) $shouldLog = true; break; // Info
+            case 2: if (in_array($messageLevel, [KL_WARNING, KL_ERROR])) $shouldLog = true; break; // Warning
+            case 1: if ($messageLevel === KL_ERROR) $shouldLog = true; break; // Error
         }
 
-        // KL_DEBUG is a special case and should only ever be logged if Debug level is explicitly selected
         if ($messageLevel === KL_DEBUG && $configuredLevel !== 4) {
             $shouldLog = false;
         }
         
         if ($shouldLog) {
-            // Adhere to the high-priority instruction to ALWAYS log as KL_MESSAGE type
             $this->LogMessage($message, KL_MESSAGE);
         }
     }
