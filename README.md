@@ -144,8 +144,4 @@ Parameter                   | Type              | Mandatory?   | Purpose
 
 Parameter                 | Type              | Mandatory?                    | Purpose
 --------------------------|-------------------|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-**Temp Sensor**           | Variable          | **Yes**                       | The variable holding the room's current temperature.
-**Target Temp**           | Variable          | **Yes**                       | The variable holding the room's desired target temperature.
-**Demand Variable**       | Variable          | **Yes (in Cooperative Mode)** | **This is an input.** The module reads this variable to know if the Zoning Manager has permitted this room to receive cooling. It must link to the corresponding `Demand Output` variable from the Zoning Manager.
-**Room Size**             | Property          | No                            | A weighting factor. Larger rooms can be configured to have more influence on the overall cooling demand calculation. Defaults to 10.
-**Threshold (°)**         | Property          | No                            | A per-room temperature threshold to override the global Hysteresis setting. Defaults to the global value if set to 0.
+**Temp Sensor**           | Variable          | **Yes**           
