@@ -43,15 +43,38 @@
                 },
                 { "type": "Select", "name": "LogLevel", "caption": "Log Level", "options": [{"label":"Off","value":0},{"label":"Error","value":1},{"label":"Warning","value":2},{"label":"Info","value":3},{"label":"Debug","value":4}], "defaultValue": 3},
                 { "type": "Label", "label": " " },
-                { "type": "Label", "label": "Hyperparameters:" },
-                { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (Learning Rate)", "suffix": "", "digits": 2, "defaultValue": 0.05 },
+                { "type": "Label", "label": "Hyperparameters (for learning):" },
+                { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (Learning Rate)", "info": "Recommended for learning: 0.1", "suffix": "", "digits": 2, "defaultValue": 0.1 },
                 { "type": "NumberSpinner", "name": "Gamma", "caption": "Gamma (Discount Factor)", "suffix": "", "digits": 2, "defaultValue": 0.9 },
-                { "type": "NumberSpinner", "name": "DecayRate", "caption": "Decay Rate", "suffix": "", "digits": 4, "defaultValue": 0.005 },
+                { "type": "NumberSpinner", "name": "DecayRate", "caption": "Epsilon Decay Rate", "info": "Recommended for learning: 0.001", "suffix": "", "digits": 4, "defaultValue": 0.001 },
                 { "type": "Label", "label": " " },
-                { "type": "Label", "label": "System Settings:" },
-                { "type": "NumberSpinner", "name": "PowerStep", "caption": "Power Step Size", "suffix": "%", "defaultValue": 20 },
-                { "type": "NumberSpinner", "name": "FanStep", "caption": "Fan Step Size", "suffix": "%", "defaultValue": 20 },
-                { "type": "ValidationTextBox", "name": "CustomFanSpeeds", "caption": "Custom Fan Speeds", "info": "Enter specific fan speed levels separated by commas (e.g., 10,30,50,70,90,100). This will override 'Fan Step Size'." },
+                { "type": "Label", "label": "System & Action Settings:" },
+                { 
+                    "type": "ValidationTextBox", 
+                    "name": "CustomPowerLevels", 
+                    "caption": "Custom Power Levels", 
+                    "info": "Enter specific power levels separated by commas (e.g., 30,55,75,100). Overrides 'Power Step Size'." 
+                },
+                { 
+                    "type": "NumberSpinner", 
+                    "name": "PowerStep", 
+                    "caption": "Power Step Size (Fallback)", 
+                    "suffix": "%", 
+                    "defaultValue": 20 
+                },
+                { 
+                    "type": "ValidationTextBox", 
+                    "name": "CustomFanSpeeds", 
+                    "caption": "Custom Fan Speeds", 
+                    "info": "Enter specific fan speed levels separated by commas (e.g., 30,60,90). Overrides 'Fan Step Size'." 
+                },
+                { 
+                    "type": "NumberSpinner", 
+                    "name": "FanStep", 
+                    "caption": "Fan Step Size (Fallback)", 
+                    "suffix": "%", 
+                    "defaultValue": 20 
+                },
                 { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Timer Interval (seconds)", "suffix": "s", "defaultValue": 120 },
                 { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (Global)", "suffix": "°", "digits": 1, "defaultValue": 0.5 },
                 { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Change per Step", "suffix": "%", "defaultValue": 40 },
@@ -60,6 +83,7 @@
         }
     ],
     "actions": [
-        { "type": "Button", "label": "Reset Learning", "onClick": "ACIPS_ResetLearning($id);" }
+        { "type": "Button", "label": "Reset Learning", "onClick": "ACIPS_ResetLearning($id);" },
+        { "type": "Button", "label": "Update Visualization", "onClick": "ACIPS_UpdateVisualization($id);" }
     ]
 }
