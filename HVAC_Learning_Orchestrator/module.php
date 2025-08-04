@@ -60,18 +60,27 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
 
         if ($zoningID == 0 || $adaptiveID == 0) {
-            echo "Error: Please set and save the 'Core Module Links' before trying to generate a plan.";
+            // Provide feedback via the new label
+            $this->UpdateFormField('ProposalStatusLabel', 'caption', 'Error: Please set and save the "Core Module Links" first!');
+            $this->UpdateFormField('ProposalStatusLabel', 'color', '#FF0000'); // Red for error
+            $this->UpdateFormField('ProposalStatusLabel', 'visible', true);
             return;
         }
 
+        // 1. Generate the plan array
         $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
+        
+        // 2. Convert the plan to a JSON string
         $planJson = json_encode($proposedPlan);
 
+        // 3. Update the 'value' of the 'CalibrationPlan' list element
         $this->UpdateFormField('CalibrationPlan', 'value', $planJson);
         
-        echo "A new plan has been proposed. Review the details and click 'Apply' at the top to save it.";
+        // 4. Provide non-blocking feedback to the user via the label
+        $this->UpdateFormField('ProposalStatusLabel', 'caption', 'Success! Proposed plan loaded below. Review and click "Apply" to save.');
+        $this->UpdateFormField('ProposalStatusLabel', 'color', '#008000'); // Green for success
+        $this->UpdateFormField('ProposalStatusLabel', 'visible', true);
     }
-
     public function StartCalibration()
     {
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
