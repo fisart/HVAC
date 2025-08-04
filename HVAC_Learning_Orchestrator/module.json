@@ -9,7 +9,7 @@
         "Climate Control Self-Tuning"
     ],
     "parentRequirements": [
-        "{GUID-OF-ZONING-MANAGER-MODULE}",
+        "{CE67653F-2712-207E-4AF4-0F7CBACBEDED}",
         "{GUID-OF-ADAPTIVE-HVAC-CONTROL-MODULE}"
     ],
     "childRequirements": [],
