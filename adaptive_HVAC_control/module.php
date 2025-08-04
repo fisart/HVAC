@@ -192,7 +192,14 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     // --- NEW PUBLIC API FOR ORCHESTRATOR ---
-
+    /**
+     * @brief API function to provide the module's available actions to other modules.
+     * @return string A JSON-encoded string of the action pairs array.
+     */
+    public function GetActionPairs(): string
+    {
+        return json_encode($this->_getActionPairs());
+    }
     /**
      * @brief Programmatically sets the operating mode of the module.
      * @param string $mode The target mode ('cooperative', 'standalone', 'orchestrated').
@@ -497,7 +504,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->WriteAttributeFloat('Epsilon', max(0.01, $eps * (1 - $dec)));
     }
 
-    private function getActionPairs(): array
+    private function _getActionPairs(): array
     {
         // --- Power Levels ---
         $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
