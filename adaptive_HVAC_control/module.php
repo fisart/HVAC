@@ -2,7 +2,7 @@
 /**
  * Adaptive HVAC Control
  *
- * Version: 2.8 (Custom Power Levels & Advanced Energy Model)
+ * Version: 3.0 (Orchestration API & Refactoring)
  * Author: Artur Fischer
  * Co-Author / Review: AI Consultant
  */
@@ -30,11 +30,8 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyString('MonitoredRooms', '[]');
         $this->RegisterPropertyInteger('TimerInterval', 120);
 
-        // Deprecated property, kept for backwards compatibility but hidden by form.json
         $this->RegisterPropertyInteger('PowerStep', 20);
-        // NEW: Property for discrete, optimized power levels
         $this->RegisterPropertyString('CustomPowerLevels', '30,55,75,100');
-
         $this->RegisterPropertyInteger('FanStep', 20);
         $this->RegisterPropertyString('CustomFanSpeeds', '');
         $this->RegisterPropertyString('OperatingMode', 'cooperative');
@@ -67,7 +64,13 @@ class adaptive_HVAC_control extends IPSModule
         }
         $this->WriteAttributeString('LastOperatingMode', $currentMode);
 
-        $this->SetTimerInterval('ProcessCoolingLogic', $this->ReadPropertyInteger('TimerInterval') * 1000);
+        if ($this->ReadPropertyString('OperatingMode') === 'orchestrated') {
+            $this->SetTimerInterval('ProcessCoolingLogic', 0); // Disable timer
+            $this->Log('Operating Mode set to Orchestrated. Internal timer disabled.', KL_MESSAGE);
+        } else {
+            $this->SetTimerInterval('ProcessCoolingLogic', $this->ReadPropertyInteger('TimerInterval') * 1000); // Enable timer
+        }
+
         $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
         $this->UpdateVisualization();
         
@@ -122,135 +125,22 @@ class adaptive_HVAC_control extends IPSModule
         ]);
     }
 
+    /**
+     * @brief Timer-driven wrapper for autonomous operation.
+     */
     public function ProcessCoolingLogic()
     {
-        $this->Log('Timer called, starting logic.', KL_DEBUG);
-
-        if ($this->ReadPropertyBoolean('ManualOverride')) {
-            $this->SetStatus(200);
-            return;
-        }
-
-        $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
-        $powerOutputID = $this->ReadPropertyInteger('PowerOutputLink');
-        $fanOutputID = $this->ReadPropertyInteger('FanOutputLink');
-        $coilTempID = $this->ReadPropertyInteger('CoilTempLink');
-        $minCoilTempID = $this->ReadPropertyInteger('MinCoilTempLink');
-
-        if ($acActiveID === 0 || !IPS_VariableExists($acActiveID)) {
-            $this->SetStatus(104);
-            $this->Log('Exiting: AC Active Link is not configured or missing.', KL_ERROR);
+        // If we are in an external control mode, the timer does nothing.
+        if ($this->ReadPropertyString('OperatingMode') === 'orchestrated' || $this->ReadPropertyBoolean('ManualOverride')) {
             return;
         }
         
-        if (!GetValue($acActiveID)) {
-            $this->SetStatus(201);
-            if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
-            if ($fanOutputID > 0 && IPS_VariableExists($fanOutputID)) RequestAction($fanOutputID, 0);
-            return;
-        }
-        
-        $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
-        $isCoolingNeeded = false;
-        
-        $operatingMode = $this->ReadPropertyString('OperatingMode');
-
-        if ($operatingMode === 'cooperative') {
-            foreach ($monitoredRooms as $room) {
-                $demandID = $room['demandID'] ?? 0;
-                if ($demandID > 0 && IPS_VariableExists($demandID) && GetValueInteger($demandID) > 0) {
-                    $isCoolingNeeded = true;
-                    break;
-                }
-            }
-        } else {
-            $hysteresis = $this->ReadPropertyFloat('Hysteresis');
-            foreach ($monitoredRooms as $room) {
-                $tempID = $room['tempID'] ?? 0;
-                $targetID = $room['targetID'] ?? 0;
-                if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
-                    if (GetValue($tempID) > (GetValue($targetID) + ($room['threshold'] ?? $hysteresis))) {
-                        $isCoolingNeeded = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!$isCoolingNeeded) {
-            $this->Log('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
-            if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
-            if ($fanOutputID > 0 && IPS_VariableExists($fanOutputID)) RequestAction($fanOutputID, 0);
-            $this->SetStatus(102);
-            return;
-        }
-        
-        if ($powerOutputID === 0 || !IPS_VariableExists($powerOutputID) || $fanOutputID === 0 || !IPS_VariableExists($fanOutputID) || $coilTempID === 0 || !IPS_VariableExists($coilTempID) || $minCoilTempID === 0 || !IPS_VariableExists($minCoilTempID)) {
-             $this->SetStatus(104);
-             $this->Log('Exiting: One or more core links (Power, Fan, Coil Temps) are not configured or missing.', KL_ERROR);
-             return;
-        }
-
-        $this->SetStatus(102);
-        $Q = json_decode($this->ReadAttributeString('QTable'), true);
-        if (!is_array($Q)) { $Q = []; }
-        
-        $meta = json_decode($this->GetBuffer('MetaData'), true) ?: [];
-        
-        $minCoil = GetValue($minCoilTempID);
-        $coilTemp = GetValue($coilTempID);
-        $prevState = $meta['state'] ?? null;
-        $prevAction = $meta['action'] ?? $this->getActionPairs()[0];
-        $prevTs = $meta['ts'] ?? null;
-        $prev_WAD = $meta['WAD'] ?? 0;
-        $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
-        $coilState = max($coilTemp, $minCoil + $this->ReadPropertyFloat('Hysteresis'));
-        
-        list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilState, $minCoil);
-        $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
-        
-        $state = '';
-        $r_overcool = 0.0;
-        if ($operatingMode === 'standalone') {
-            $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
-            $r_overcool = -$rawD_cold * 5;
-        } else {
-            $state = "$dBin|$cBin|$coilTrendBin|$hotRoomCountBin";
-        }
-        
-        list($prevP, $prevF) = explode(':', $prevAction);
-        
-        $r_progress = $prev_WAD - $rawWAD;
-        $r_freeze = -max(0, $minCoil - $coilState) * 2;
-        $r_energy = $this->calculateEnergyReward(intval($prevP), intval($prevF));
-        $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
-        
-        if ($prevState !== null && $prevTs !== null) {
-            $dt = max(1, (time() - intval($prevTs)) / 60);
-            $dt = min($dt, 10);
-            $this->updateQ($Q, $state, $prevState, $prevAction, $r_total, $dt);
-        }
-        
-        $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
-        list($P, $F) = explode(':', $action);
-        RequestAction($powerOutputID, intval($P));
-        RequestAction($fanOutputID, intval($F));
-        
-        $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
-        $this->WriteAttributeString('QTable', json_encode($Q));
-        $this->SetBuffer('MetaData', json_encode($newMeta));
-        
-        if ($action !== '0:0') {
-            $this->decayEpsilon();
-        }
-        
-        $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
-        $this->SetValue("QTableJSON", json_encode($Q, JSON_PRETTY_PRINT));
-        $this->UpdateVisualization();
-        $this->Log("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_MESSAGE);
+        // For normal operation, it calls the new core logic function with NO forced action.
+        $this->ExecuteLearningCycle(null);
     }
 
-    public function ResetLearning() {
+    public function ResetLearning()
+    {
         $this->WriteAttributeString('QTable', json_encode([]));
         $this->SetBuffer('MetaData', json_encode([]));
         $this->WriteAttributeFloat('Epsilon', 0.4);
@@ -293,14 +183,188 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
     
-    public function UpdateVisualization() {
+    public function UpdateVisualization()
+    {
         $this->SetValue("QTableHTML", $this->GenerateQTableHTML());
         if ($_IPS['SENDER'] == 'WebFront') {
             echo "Visualization Updated!";
         }
     }
 
-    private function GenerateQTableHTML(): string {
+    // --- NEW PUBLIC API FOR ORCHESTRATOR ---
+
+    /**
+     * @brief Programmatically sets the operating mode of the module.
+     * @param string $mode The target mode ('cooperative', 'standalone', 'orchestrated').
+     */
+    public function SetMode(string $mode)
+    {
+        IPS_SetProperty($this->InstanceID, 'OperatingMode', $mode);
+        if (IPS_HasChanges($this->InstanceID)) {
+            IPS_ApplyChanges($this->InstanceID);
+        }
+    }
+
+    /**
+     * @brief The main API for the Orchestrator. Forces an action, runs one full learning cycle, and returns the result.
+     * @param string $forcedAction The action to execute in "P:F" format (e.g., "75:50").
+     * @return string A JSON-encoded associative array containing the outcome, e.g., '{"state":"2|3|-1|4", "reward":-0.5}'
+     */
+    public function ForceActionAndLearn(string $forcedAction): string
+    {
+        if ($this->ReadPropertyString('OperatingMode') !== 'orchestrated') {
+            $this->Log('ForceActionAndLearn called, but module is not in Orchestrated mode. Ignoring.', KL_WARNING);
+            return json_encode(['error' => 'Not in Orchestrated mode']);
+        }
+        
+        $result = $this->ExecuteLearningCycle($forcedAction);
+        return json_encode($result);
+    }
+
+    // --- PRIVATE HELPER AND CORE LOGIC FUNCTIONS ---
+
+    /**
+     * @brief The core workhorse function that runs one full learning and execution cycle.
+     * @param ?string $forcedAction If not null, this action will be executed instead of choosing one from the Q-Table.
+     * @return array An associative array containing the cycle's outcome: ['state' => ..., 'reward' => ...]
+     */
+    private function ExecuteLearningCycle(?string $forcedAction): array
+    {
+        $this->Log('Executing learning cycle.', KL_DEBUG);
+
+        if ($this->ReadPropertyBoolean('ManualOverride') && $forcedAction === null) {
+            $this->SetStatus(200);
+            return ['state' => 'manual', 'reward' => 0];
+        }
+
+        $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
+        $powerOutputID = $this->ReadPropertyInteger('PowerOutputLink');
+        $fanOutputID = $this->ReadPropertyInteger('FanOutputLink');
+        $coilTempID = $this->ReadPropertyInteger('CoilTempLink');
+        $minCoilTempID = $this->ReadPropertyInteger('MinCoilTempLink');
+
+        if ($acActiveID === 0 || !IPS_VariableExists($acActiveID)) {
+            $this->SetStatus(104);
+            $this->Log('Exiting: AC Active Link is not configured or missing.', KL_ERROR);
+            return ['state' => 'error', 'reward' => 0];
+        }
+        
+        if (!GetValue($acActiveID)) {
+            $this->SetStatus(201);
+            if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
+            if ($fanOutputID > 0 && IPS_VariableExists($fanOutputID)) RequestAction($fanOutputID, 0);
+            return ['state' => 'inactive', 'reward' => 0];
+        }
+        
+        $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
+        $isCoolingNeeded = false;
+        
+        $operatingMode = $this->ReadPropertyString('OperatingMode');
+
+        if ($operatingMode === 'cooperative' || $operatingMode === 'orchestrated') {
+            foreach ($monitoredRooms as $room) {
+                $demandID = $room['demandID'] ?? 0;
+                if ($demandID > 0 && IPS_VariableExists($demandID) && GetValueInteger($demandID) > 0) {
+                    $isCoolingNeeded = true;
+                    break;
+                }
+            }
+        } else { // Standalone
+            $hysteresis = $this->ReadPropertyFloat('Hysteresis');
+            foreach ($monitoredRooms as $room) {
+                $tempID = $room['tempID'] ?? 0;
+                $targetID = $room['targetID'] ?? 0;
+                if ($tempID > 0 && IPS_VariableExists($tempID) && $targetID > 0 && IPS_VariableExists($targetID)) {
+                    if (GetValue($tempID) > (GetValue($targetID) + ($room['threshold'] ?? $hysteresis))) {
+                        $isCoolingNeeded = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!$isCoolingNeeded && $forcedAction === null) {
+            $this->Log('No rooms require cooling. Setting output to 0 and exiting.', KL_MESSAGE);
+            if ($powerOutputID > 0 && IPS_VariableExists($powerOutputID)) RequestAction($powerOutputID, 0);
+            if ($fanOutputID > 0 && IPS_VariableExists($fanOutputID)) RequestAction($fanOutputID, 0);
+            $this->SetStatus(102);
+            return ['state' => 'idle', 'reward' => 0];
+        }
+        
+        if ($powerOutputID === 0 || !IPS_VariableExists($powerOutputID) || $fanOutputID === 0 || !IPS_VariableExists($fanOutputID) || $coilTempID === 0 || !IPS_VariableExists($coilTempID) || $minCoilTempID === 0 || !IPS_VariableExists($minCoilTempID)) {
+             $this->SetStatus(104);
+             $this->Log('Exiting: One or more core links are missing.', KL_ERROR);
+             return ['state' => 'error', 'reward' => 0];
+        }
+
+        $this->SetStatus(102);
+        $Q = json_decode($this->ReadAttributeString('QTable'), true);
+        if (!is_array($Q)) { $Q = []; }
+        
+        $meta = json_decode($this->GetBuffer('MetaData'), true) ?: [];
+        
+        $minCoil = GetValue($minCoilTempID);
+        $coilTemp = GetValue($coilTempID);
+        $prevState = $meta['state'] ?? null;
+        $prevAction = $meta['action'] ?? $this->getActionPairs()[0];
+        $prevTs = $meta['ts'] ?? null;
+        $prev_WAD = $meta['WAD'] ?? 0;
+        $prevCoilTemp = $meta['coilTemp'] ?? $coilTemp;
+        
+        list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $rawD_cold) = $this->discretizeState($monitoredRooms, $coilTemp, $minCoil);
+        $coilTrendBin = $this->getCoilTrendBin($coilTemp, $prevCoilTemp);
+        
+        $state = '';
+        $r_overcool = 0.0;
+        if ($operatingMode === 'standalone') {
+            $state = "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin";
+            $r_overcool = -$rawD_cold * 5;
+        } else { // Cooperative and Orchestrated
+            $state = "$dBin|$cBin|$coilTrendBin|$hotRoomCountBin";
+        }
+        
+        $r_total = 0;
+        if ($prevState !== null && $prevAction !== null) {
+            list($prevP, $prevF) = explode(':', $prevAction);
+            $r_progress = $prev_WAD - $rawWAD;
+            $r_freeze = -max(0, $minCoil - $coilTemp) * 2;
+            $r_energy = $this->calculateEnergyReward(intval($prevP), intval($prevF));
+            $r_total = ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
+            
+            $dt = max(1, (time() - intval($prevTs)) / 60);
+            $dt = min($dt, 10);
+            $this->updateQ($Q, $state, $prevState, $prevAction, $r_total, $dt);
+        }
+        
+        $action = '';
+        if ($forcedAction !== null) {
+            $action = $forcedAction;
+        } else {
+            $action = $this->choose($Q, $this->ReadAttributeFloat('Epsilon'), $prevAction, $state);
+        }
+        
+        list($P, $F) = explode(':', $action);
+        RequestAction($powerOutputID, intval($P));
+        RequestAction($fanOutputID, intval($F));
+        
+        $newMeta = [ 'state' => $state, 'action' => $action, 'ts' => time(), 'WAD' => $rawWAD, 'D_cold' => $rawD_cold, 'coilTemp' => $coilTemp ];
+        $this->WriteAttributeString('QTable', json_encode($Q));
+        $this->SetBuffer('MetaData', json_encode($newMeta));
+        
+        if ($action !== '0:0' && $forcedAction === null) { // Only decay epsilon during autonomous operation
+            $this->decayEpsilon();
+        }
+        
+        $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
+        $this->SetValue("QTableJSON", json_encode($Q, JSON_PRETTY_PRINT));
+        $this->UpdateVisualization();
+        $this->Log("State: $state -> Action: P=$P F=$F (Reward: ".number_format($r_total, 2).")", KL_MESSAGE);
+
+        return ['state' => $state, 'reward' => $r_total];
+    }
+
+    private function GenerateQTableHTML(): string
+    {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
         if (!is_array($qTable) || empty($qTable)) {
             $this->Log('GenerateQTableHTML: Q-Table is empty.', KL_DEBUG);
@@ -348,6 +412,7 @@ class adaptive_HVAC_control extends IPSModule
         
         $html .= '</div></div>';
         $html .= '<table><thead><tr><th class="state-col">State</th>';
+        $actions = $this->getActionPairs();
         foreach ($actions as $action) {
             $html .= "<th>{$action}</th>";
         }
@@ -374,7 +439,8 @@ class adaptive_HVAC_control extends IPSModule
         return $html;
     }
 
-    private function getColorForValue(float $value, float $min, float $max): string {
+    private function getColorForValue(float $value, float $min, float $max): string
+    {
         if ($value == self::OPTIMISTIC_INIT) return '#f0f0f0';
         if ($max == $min) return '#ffffff';
         if ($value >= 0) {
@@ -391,7 +457,8 @@ class adaptive_HVAC_control extends IPSModule
         return sprintf('#%02x%02x%02x', $r, $g, $b);
     }
 
-    private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt) {
+    private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, float $dt)
+    {
         $actions = $this->getActionPairs();
         if (!isset($Q[$sOld])) $Q[$sOld] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
         if (!isset($Q[$sNew])) $Q[$sNew] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
@@ -403,7 +470,8 @@ class adaptive_HVAC_control extends IPSModule
         $Q[$sOld][$aOld] = $oldQ + $alpha * ($r * $dt + $gamma * $maxFutureQ - $oldQ);
     }
     
-    private function choose(array &$Q, float $epsilon, string $lastAction, string $state): string {
+    private function choose(array &$Q, float $epsilon, string $lastAction, string $state): string
+    {
         $actions = $this->getActionPairs();
         if (!isset($Q[$state])) {
             $Q[$state] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
@@ -422,13 +490,15 @@ class adaptive_HVAC_control extends IPSModule
         return $chosenAction;
     }
 
-    private function decayEpsilon() {
+    private function decayEpsilon()
+    {
         $eps = $this->ReadAttributeFloat('Epsilon');
         $dec = $this->ReadPropertyFloat('DecayRate');
         $this->WriteAttributeFloat('Epsilon', max(0.01, $eps * (1 - $dec)));
     }
 
-    private function getActionPairs(): array {
+    private function getActionPairs(): array
+    {
         // --- Power Levels ---
         $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
         $powerLevels = [];
@@ -492,7 +562,8 @@ class adaptive_HVAC_control extends IPSModule
         return array_unique($actions);
     }
     
-    private function getAvailableActions(string $lastAction): array {
+    private function getAvailableActions(string $lastAction): array
+    {
         if ($lastAction === '0:0') { return $this->getActionPairs(); }
         list($lastP, $lastF) = array_map('intval', explode(':', $lastAction));
         $maxPDelta = $this->ReadPropertyInteger('MaxPowerDelta');
@@ -506,13 +577,15 @@ class adaptive_HVAC_control extends IPSModule
         return $available;
     }
     
-    private function discretizeState(array $monitoredRooms, float $coil, float $min): array {
+    private function discretizeState(array $monitoredRooms, float $coil, float $min): array
+    {
         $weightedDeviationSum = 0.0;
         $totalSizeOfHotRooms = 0.0;
         $D_cold = 0.0;
         $hotRoomCount = 0;
         $maxDeviation = 0.0;
-        $isCooperative = ($this->ReadPropertyString('OperatingMode') === 'cooperative');
+        $operatingMode = $this->ReadPropertyString('OperatingMode');
+        $isCooperative = ($operatingMode === 'cooperative' || $operatingMode === 'orchestrated');
 
         foreach ($monitoredRooms as $room) {
             $tempID = $room['tempID'] ?? 0;
@@ -552,47 +625,24 @@ class adaptive_HVAC_control extends IPSModule
         return [$cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD, $D_cold];
     }
     
-    private function getCoilTrendBin(float $currentCoil, float $previousCoil): int {
+    private function getCoilTrendBin(float $currentCoil, float $previousCoil): int
+    {
         $delta = $currentCoil - $previousCoil;
         if ($delta < -0.2) { return -1; } elseif ($delta > 0.2) { return 1; }
         return 0;
     }
     
-    /**
-     * Calculates a realistic energy penalty based on non-linear hardware characteristics.
-     * @param int $power The compressor power setting (0-100).
-     * @param int $fan The fan speed setting (0-100).
-     * @return float The negative reward (penalty) for energy consumption.
-     */
     private function calculateEnergyReward(int $power, int $fan): float
     {
         if ($power == 0 && $fan == 0) {
             return 0.0;
         }
 
-        // Normalize power and fan values to a 0.0 to 1.0 scale
         $p_norm = $power / 100.0;
         $f_norm = $fan / 100.0;
-
-        // Part 1: Power (Compressor) Penalty
-        // Models the U-shaped efficiency curve of an inverter.
-        // Penalizes very low (<25%) and very high (>80%) power settings more heavily.
-        // The "sweet spot" is modeled to be around 40-60%.
-        // The formula creates a parabola with its minimum at 50% power.
         $power_penalty = (0.4 * $p_norm) + (0.6 * pow($p_norm - 0.5, 2));
-
-        // Part 2: Fan Penalty
-        // Models the fan's cubic power law. High fan speeds are very costly.
-        // pow($f_norm, 3) means 100% fan is 8x more costly than 50% fan.
         $fan_penalty = pow($f_norm, 3);
-
-        // Part 3: Combine and Scale
-        // Combine penalties. The compressor is the main consumer, so it gets a higher weight.
         $total_penalty = 0.6 * $power_penalty + 0.4 * $fan_penalty;
-
-        // Part 4: Final Reward Scaling
-        // Scale the final penalty to be in a similar magnitude to other rewards.
-        // This factor may need tuning based on observation.
         return -0.05 * $total_penalty;
     }
 
