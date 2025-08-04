@@ -504,70 +504,90 @@ class adaptive_HVAC_control extends IPSModule
         $this->WriteAttributeFloat('Epsilon', max(0.01, $eps * (1 - $dec)));
     }
 
-    private function _getActionPairs(): array
-    {
-        // --- Power Levels ---
-        $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
-        $powerLevels = [];
-        if (!empty(trim($customPowerLevels))) {
-            $parts = explode(',', $customPowerLevels);
-            foreach ($parts as $part) {
-                $value = intval(trim($part));
-                if ($value > 0 && $value <= 100) {
-                    $powerLevels[] = $value;
-                }
-            }
-            $powerLevels = array_unique($powerLevels);
-            sort($powerLevels, SORT_NUMERIC);
-        } else {
-            // Fallback to old PowerStep logic
-            $powerStep = $this->ReadPropertyInteger('PowerStep');
-            if ($powerStep < 10) $powerStep = 10;
-            for ($p = $powerStep; $p <= 100; $p += $powerStep) {
-                $powerLevels[] = $p;
-            }
-        }
-        if (empty($powerLevels)) {
-            $powerLevels = [100]; // Safety fallback
-        }
+   // In adaptive_HVAC_control/module.php
 
-        // --- Fan Levels ---
-        $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
-        $fanLevels = [];
-        if (!empty(trim($customFanSpeeds))) {
-            $parts = explode(',', $customFanSpeeds);
-            foreach ($parts as $part) {
-                $value = intval(trim($part));
-                if ($value > 0 && $value <= 100) {
-                    $fanLevels[] = $value;
-                }
-            }
-            $fanLevels = array_unique($fanLevels);
-            sort($fanLevels, SORT_NUMERIC);
-        } else {
-            $fanStep = $this->ReadPropertyInteger('FanStep');
-            if ($fanStep < 10) $fanStep = 10;
-            for ($f = $fanStep; $f <= 100; $f += $fanStep) {
-                $fanLevels[] = $f;
+private function _getActionPairs(): array
+{
+    // --- Power Levels ---
+    $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
+    $powerLevels = [];
+    if (!empty(trim($customPowerLevels))) {
+        // ... (this part is fine, no changes needed)
+        $parts = explode(',', $customPowerLevels);
+        foreach ($parts as $part) {
+            $value = intval(trim($part));
+            if ($value > 0 && $value <= 100) {
+                $powerLevels[] = $value;
             }
         }
-        if (empty($fanLevels)) {
-            $fanLevels = [100]; // Safety fallback
+        $powerLevels = array_unique($powerLevels);
+        sort($powerLevels, SORT_NUMERIC);
+    } else {
+        // Fallback to old PowerStep logic
+        $powerStep = $this->ReadPropertyInteger('PowerStep');
+        
+        // --- START OF FIX ---
+        // Explicitly check for 0 or negative values to prevent an infinite loop.
+        if ($powerStep <= 0) {
+            $this->LogMessage('PowerStep is 0 or invalid. Defaulting to 20 to prevent infinite loop.', KL_WARNING);
+            $powerStep = 20; // Default to a safe, non-zero value
         }
+        // --- END OF FIX ---
 
-        // --- Combine ---
-        $actions = ['0:0'];
-        foreach ($powerLevels as $p) {
-            foreach ($fanLevels as $f) {
-                $actions[] = "{$p}:{$f}";
-            }
+        for ($p = $powerStep; $p <= 100; $p += $powerStep) {
+            $powerLevels[] = $p;
         }
-
-        if (!in_array("100:100", $actions)) {
-            $actions[] = "100:100";
-        }
-        return array_unique($actions);
     }
+    if (empty($powerLevels)) {
+        $powerLevels = [100]; // Safety fallback
+    }
+
+    // --- Fan Levels ---
+    $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
+    $fanLevels = [];
+    if (!empty(trim($customFanSpeeds))) {
+        // ... (this part is fine, no changes needed)
+        $parts = explode(',', $customFanSpeeds);
+        foreach ($parts as $part) {
+            $value = intval(trim($part));
+            if ($value > 0 && $value <= 100) {
+                $fanLevels[] = $value;
+            }
+        }
+        $fanLevels = array_unique($fanLevels);
+        sort($fanLevels, SORT_NUMERIC);
+    } else {
+        $fanStep = $this->ReadPropertyInteger('FanStep');
+
+        // --- START OF FIX ---
+        // Explicitly check for 0 or negative values to prevent an infinite loop.
+        if ($fanStep <= 0) {
+            $this->LogMessage('FanStep is 0 or invalid. Defaulting to 20 to prevent infinite loop.', KL_WARNING);
+            $fanStep = 20; // Default to a safe, non-zero value
+        }
+        // --- END OF FIX ---
+
+        for ($f = $fanStep; $f <= 100; $f += $fanStep) {
+            $fanLevels[] = $f;
+        }
+    }
+    if (empty($fanLevels)) {
+        $fanLevels = [100]; // Safety fallback
+    }
+
+    // --- Combine --- (this part is fine, no changes needed)
+    $actions = ['0:0'];
+    foreach ($powerLevels as $p) {
+        foreach ($fanLevels as $f) {
+            $actions[] = "{$p}:{$f}";
+        }
+    }
+
+    if (!in_array("100:100", $actions)) {
+        $actions[] = "100:100";
+    }
+    return array_unique($actions);
+}
     
     private function getAvailableActions(string $lastAction): array
     {
