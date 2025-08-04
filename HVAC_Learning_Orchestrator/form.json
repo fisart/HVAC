@@ -1,0 +1,57 @@
+{
+    "elements": [
+        { "type": "Label", "label": "This module orchestrates advanced, automated learning routines for the HVAC system." },
+        { "type": "Label", "label": " " },
+        { "type": "Label", "label": "--- Core Module Links ---" },
+        {
+            "type": "SelectInstance",
+            "name": "ZoningManagerID",
+            "caption": "Link to Zoning & Demand Manager",
+            "required": true
+        },
+        {
+            "type": "SelectInstance",
+            "name": "AdaptiveControlID",
+            "caption": "Link to Adaptive HVAC Control",
+            "required": true
+        },
+        { "type": "Label", "label": " "},
+        { "type": "Label", "label": "--- Room Configuration Links (for Level 4 Calibration) ---" },
+        {
+            "type": "List", "name": "RoomConfigLinks", "caption": "Room Configuration Links",
+            "add": true, "delete": true,
+            "columns": [
+                { "caption": "Room Name (must match Zoning Manager)", "name": "name", "width": "250px", "add": "" },
+                { "caption": "Current Temp. Variable", "name": "tempID", "width": "auto", "add": 0, "edit": { "type": "SelectVariable" } },
+                { "caption": "Target Temp. Variable", "name": "targetID", "width": "auto", "add": 0, "edit": { "type": "SelectVariable" } }
+            ]
+        },
+        { "type": "Label", "label": " "},
+        { "type": "Label", "label": "--- Automated Calibration Plan ---" },
+        {
+            "type": "List",
+            "name": "CalibrationPlan",
+            "caption": "Calibration Plan",
+            "add": true,
+            "delete": true,
+            "sort": { "column": "stageName", "direction": "ascending" },
+            "default": "[{\"stageName\":\"Stage 1: Low Demand Test (1 Zone)\",\"flapConfig\":\"Living Room=true, Kitchen=false\",\"targetOffset\":\"-0.5\",\"actionPattern\":\"30:30, 55:60, 75:90, 100:100\"},{\"stageName\":\"Stage 2: High Demand Test (All Zones)\",\"flapConfig\":\"Living Room=true, Kitchen=true\",\"targetOffset\":\"-5.0\",\"actionPattern\":\"30:30, 55:60, 75:90, 100:100\"},{\"stageName\":\"Stage 3: Coil Stress Test\",\"flapConfig\":\"Living Room=true, Kitchen=true\",\"targetOffset\":\"-5.0\",\"actionPattern\":\"100:90, 100:50, 100:30, 100:10, 75:10, 30:90\"}]",
+            "columns": [
+                { "caption": "Stage Name", "name": "stageName", "width": "250px", "add": "New Stage" },
+                { "caption": "Flap Config", "name": "flapConfig", "width": "300px", "add": "Living Room=true, Kitchen=false", "info": "Comma-separated RoomName=true/false" },
+                { "caption": "Target Temp Offset (°C)", "name": "targetOffset", "width": "150px", "add": "-5.0" },
+                { "caption": "Action Pattern", "name": "actionPattern", "width": "auto", "add": "30:30, 55:60, 75:90, 100:100" }
+            ]
+        }
+    ],
+    "actions": [
+        { "type": "Button", "label": "Start Calibration", "onClick": "ORCH_StartCalibration($id);" },
+        { "type": "Button", "label": "Stop Calibration", "onClick": "ORCH_StopCalibration($id);" }
+    ],
+    "status": [
+        { "code": 102, "icon": "active", "caption": "Orchestrator is Idle." },
+        { "code": 201, "icon": "repeat", "caption": "Calibration is Running." },
+        { "code": 202, "icon": "error", "caption": "Module links are not configured." },
+        { "code": 203, "icon": "ok", "caption": "Calibration is Done." }
+    ]
+}
