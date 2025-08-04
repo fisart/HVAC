@@ -2,20 +2,8 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       1.0
- * @date          2025-08-04
- *
- * @brief         HVAC Learning Orchestrator for self-tuning control systems.
- *
- * This module acts as the "Conductor" for a multi-module HVAC system. It
- * contains a configurable, timer-driven state machine to execute an automated
- * "Commissioning and Self-Tuning" (CST) routine.
- *
- * It takes control of the Zoning and Adaptive modules, forces the system into
- * various states (e.g., high/low demand), executes a pattern of actions, and
- * commands the adaptive module to learn from the outcomes. This process seeds
- * the AI's Q-Table with high-quality, diverse data in hours instead of weeks.
- *
+ * @version       1.1 (Dynamic Plan Proposal)
+ * @date          2023-10-27
  */
 
 class HVAC_Learning_Orchestrator extends IPSModule
@@ -55,38 +43,26 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     public function GetConfigurationForm()
     {
-        $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
-    
-        // More robust check: If the CalibrationPlan property is anything other than the default '[]',
-        // it means the user has interacted with it or saved it. We should not overwrite their changes.
-        $existingPlanJson = $this->ReadPropertyString('CalibrationPlan');
-        $existingPlan = json_decode($existingPlanJson, true);
-        if (is_array($existingPlan) && !empty($existingPlan)) {
-            return json_encode($form); // Return the form as-is, showing the user's saved plan.
-        }
-    
-        $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
-        $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
-    
-        if ($zoningID == 0 || $adaptiveID == 0) {
-            $form['elements'][] = [ 'type' => 'Label', 'label' => 'Please set the Core Module Links and click "Apply", then re-open this form to see the proposed plan.', 'bold' => true, 'color' => '#FF0000' ];
-            return json_encode($form);
-        }
-    
-        // --- Generate and Inject the Proposed Plan ---
-        $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
-        foreach ($form['elements'] as &$element) {
-            if (isset($element['name']) && $element['name'] == 'CalibrationPlan') {
-                // We set the 'value' which pre-populates the list for the user.
-                $element['value'] = $proposedPlan;
-                break;
-            }
-        }
-    
-        return json_encode($form);
+        return file_get_contents(__DIR__ . '/form.json');
     }
 
     // --- Public User-Facing Functions ---
+
+    public function ProposePlan()
+    {
+        $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
+        $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
+
+        if ($zoningID == 0 || $adaptiveID == 0) {
+            echo "Error: Please set and save the 'Core Module Links' before generating a plan.";
+            return;
+        }
+
+        $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
+        
+        $this->UpdateFormField('CalibrationPlan', 'value', json_encode($proposedPlan));
+        echo "A new calibration plan has been proposed successfully!";
+    }
 
     public function StartCalibration()
     {
@@ -138,8 +114,6 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $this->SetStatus(203);
     }
     
-    // --- Core State Machine Logic ---
-
     public function RunNextStep()
     {
         if ($this->ReadAttributeString('CalibrationStatus') !== 'Running') {
@@ -161,7 +135,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         if ($actionIdx === 0) {
             $this->LogMessage("Starting Calibration Stage: " . $currentStage['name'], KL_MESSAGE);
             ZDM_CommandFlaps($zoningID, json_encode($currentStage['setup']['flaps']));
-            IPS_Sleep(5000); // Give flaps time to move
+            IPS_Sleep(5000); 
         }
 
         $this->setArtificialTargets($currentStage);
@@ -170,7 +144,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
         $resultJson = ACIPS_ForceActionAndLearn($adaptiveID, $currentAction);
         $result = json_decode($resultJson, true);
-        $this->LogMessage("Step {$stageIdx}:{$actionIdx} | Action: {$currentAction} | Result State: {$result['state']}, Reward: {$result['reward']}", KL_DEBUG);
+        $this->LogMessage("Step {$stageIdx}:{$actionIdx} | Action: {$currentAction} | Result State: {$result['state']}, Reward: " . number_format($result['reward'], 2), KL_DEBUG);
 
         $nextActionIdx = $actionIdx + 1;
         if ($nextActionIdx >= count($currentStage['actions'])) {
@@ -181,47 +155,31 @@ class HVAC_Learning_Orchestrator extends IPSModule
         }
     }
 
-    // --- Private Helper Functions ---
-
-   private function generateProposedPlan(int $zoningID, int $adaptiveID): array
+    private function generateProposedPlan(int $zoningID, int $adaptiveID): array
     {
-        // 1. Discover Rooms from the Zoning Manager
         $roomNames = [];
         $roomConfigJson = ZDM_GetRoomConfigurations($zoningID);
         $roomConfig = json_decode($roomConfigJson, true);
         if (is_array($roomConfig)) {
             foreach ($roomConfig as $room) {
-                if (!empty($room['name'])) {
-                    $roomNames[] = $room['name'];
-                }
+                if (!empty($room['name'])) $roomNames[] = $room['name'];
             }
         }
         if (empty($roomNames)) {
             $this->LogMessage("Plan generation failed: No rooms configured in Zoning Manager.", KL_WARNING);
-            return []; // Cannot generate a plan without rooms
+            return [];
         }
-    
-        // 2. Discover Actions from the Adaptive Controller
+
         $allActionsJson = ACIPS_GetActionPairs($adaptiveID);
         $allActions = json_decode($allActionsJson, true);
-    
-        // CORRECTED & ROBUST ACTION FILTERING LOGIC
+        
         $actionPattern = array_values(array_filter($allActions, function($action) {
             list($p, $f) = explode(':', $action);
-            // We want actions that are not '0' and represent a good spread.
-            // Let's select all actions with power levels 30, 75, and 100
-            // and fan speeds 30, 70, and 90. This creates a solid 3x3 test matrix.
             return $p != 0 && in_array($p, ['30', '75', '100']) && in_array($f, ['30', '70', '90']);
         }));
-    
-        if (empty($actionPattern)) {
-            // Fallback if the filter produces no results for some reason
-            $actionPattern = ['55:50', '100:100'];
-            $this->LogMessage("Could not generate a representative action pattern. Using fallback.", KL_WARNING);
-        }
+        if (empty($actionPattern)) $actionPattern = ['55:50', '100:100'];
         $actionPatternString = implode(', ', $actionPattern);
-    
-        // 3. Build the Plan Stages
+
         $firstRoom = $roomNames[0];
         $allFlapsTrue = implode(', ', array_map(function($name) { return "$name=true"; }, $roomNames));
         
@@ -230,26 +188,11 @@ class HVAC_Learning_Orchestrator extends IPSModule
             $singleFlapConfigParts[] = ($index === 0) ? "$name=true" : "$name=false";
         }
         $singleFlapConfig = implode(', ', $singleFlapConfigParts);
-    
+
         return [
-            [
-                'stageName'      => "Stage 1: Low Demand Test (1 Zone)",
-                'flapConfig'     => $singleFlapConfig,
-                'targetOffset'   => "-0.5",
-                'actionPattern'  => $actionPatternString
-            ],
-            [
-                'stageName'      => "Stage 2: High Demand Test (All Zones)",
-                'flapConfig'     => $allFlapsTrue,
-                'targetOffset'   => "-5.0",
-                'actionPattern'  => $actionPatternString
-            ],
-            [
-                'stageName'      => "Stage 3: Coil Stress Test",
-                'flapConfig'     => $allFlapsTrue,
-                'targetOffset'   => "-5.0",
-                'actionPattern'  => "100:90, 100:50, 100:30, 100:10, 75:10, 30:90"
-            ]
+            ['stageName' => "Stage 1: Low Demand Test (1 Zone)", 'flapConfig' => $singleFlapConfig, 'targetOffset' => "-0.5", 'actionPattern' => $actionPatternString ],
+            ['stageName' => "Stage 2: High Demand Test (All Zones)", 'flapConfig' => $allFlapsTrue, 'targetOffset' => "-5.0", 'actionPattern' => $actionPatternString ],
+            ['stageName' => "Stage 3: Coil Stress Test", 'flapConfig' => $allFlapsTrue, 'targetOffset' => "-5.0", 'actionPattern' => "100:90, 100:50, 100:30, 100:10, 75:10, 30:90"]
         ];
     }
 
@@ -322,6 +265,15 @@ class HVAC_Learning_Orchestrator extends IPSModule
             if ($flap['open']) $activeRooms[$flap['name']] = true;
         }
 
+        // Before setting new targets, first restore all to original to clear previous stage's settings
+        $originalTargets = json_decode($this->ReadAttributeString('OriginalTargetTemps'), true);
+        if (is_array($originalTargets)) {
+             foreach ($originalTargets as $targetID => $value) {
+                if (IPS_VariableExists($targetID)) SetValue($targetID, $value);
+            }
+        }
+
+        // Now set the artificial targets only for the active rooms in this stage
         foreach ($roomLinks as $name => $links) {
             if (isset($activeRooms[$name])) {
                 $targetID = $links['targetID'];
