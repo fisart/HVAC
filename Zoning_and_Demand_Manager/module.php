@@ -381,5 +381,12 @@ class Zoning_and_Demand_Manager extends IPSModule
         if (!empty($flapCommands) && $this->ReadPropertyBoolean('Debug')) $this->LogMessage("CommandFlaps executed: " . implode(', ', $flapCommands), KL_DEBUG);
     }
 
-    // END: Add entire block of new public functions
+    /**
+     * @brief API function to provide the module's room configuration to other modules.
+     * @return string A JSON-encoded string of the 'ControlledRooms' property array.
+     */
+    public function GetRoomConfigurations(): string
+    {
+        return $this->ReadPropertyString('ControlledRooms');
+    }
 }
