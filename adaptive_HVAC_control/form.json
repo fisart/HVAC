@@ -37,7 +37,8 @@
                     "caption": "Operating Mode", 
                     "options": [
                         {"label":"Cooperative (with Zoning & Demand Manager)", "value":"cooperative"},
-                        {"label":"Standalone", "value":"standalone"}
+                        {"label":"Standalone", "value":"standalone"},
+                        {"label":"Orchestrated (External Control by Orchestrator)", "value":"orchestrated"} 
                     ], 
                     "defaultValue": "cooperative"
                 },
