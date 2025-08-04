@@ -56,30 +56,33 @@ class HVAC_Learning_Orchestrator extends IPSModule
     public function GetConfigurationForm()
     {
         $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
-
-        // If the user has already saved a plan, DO NOT overwrite it. Show them their saved version.
-        $existingPlan = $this->ReadPropertyString('CalibrationPlan');
-        if (!empty($existingPlan) && $existingPlan !== '[]') {
-            return json_encode($form);
+    
+        // More robust check: If the CalibrationPlan property is anything other than the default '[]',
+        // it means the user has interacted with it or saved it. We should not overwrite their changes.
+        $existingPlanJson = $this->ReadPropertyString('CalibrationPlan');
+        $existingPlan = json_decode($existingPlanJson, true);
+        if (is_array($existingPlan) && !empty($existingPlan)) {
+            return json_encode($form); // Return the form as-is, showing the user's saved plan.
         }
-
+    
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
         $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
-
+    
         if ($zoningID == 0 || $adaptiveID == 0) {
-            $form['elements'][] = [ 'type' => 'Label', 'label' => 'Please set the Core Module Links and save before a plan can be proposed.', 'bold' => true, 'color' => '#FF0000' ];
+            $form['elements'][] = [ 'type' => 'Label', 'label' => 'Please set the Core Module Links and click "Apply", then re-open this form to see the proposed plan.', 'bold' => true, 'color' => '#FF0000' ];
             return json_encode($form);
         }
-
+    
+        // --- Generate and Inject the Proposed Plan ---
         $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
-
         foreach ($form['elements'] as &$element) {
             if (isset($element['name']) && $element['name'] == 'CalibrationPlan') {
+                // We set the 'value' which pre-populates the list for the user.
                 $element['value'] = $proposedPlan;
                 break;
             }
         }
-
+    
         return json_encode($form);
     }
 
