@@ -2,7 +2,7 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       1.2 (Final & Corrected)
+ * @version       1.1 (Dynamic Plan Proposal)
  * @date          2023-10-27
  */
 
@@ -43,13 +43,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     public function GetConfigurationForm()
     {
-        $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
-        
-        if ($this->ReadPropertyInteger('ZoningManagerID') == 0 || $this->ReadPropertyInteger('AdaptiveControlID') == 0) {
-            $form['elements'][] = [ 'type' => 'Label', 'label' => 'Please set the Core Module Links and click "Apply" before generating a plan.', 'bold' => true, 'color' => '#FF0000' ];
-        }
-        
-        return json_encode($form);
+        return file_get_contents(__DIR__ . '/form.json');
     }
 
     // --- Public User-Facing Functions ---
@@ -60,27 +54,16 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
 
         if ($zoningID == 0 || $adaptiveID == 0) {
-            // Provide feedback via the new label
-            $this->UpdateFormField('ProposalStatusLabel', 'caption', 'Error: Please set and save the "Core Module Links" first!');
-            $this->UpdateFormField('ProposalStatusLabel', 'color', '#FF0000'); // Red for error
-            $this->UpdateFormField('ProposalStatusLabel', 'visible', true);
+            echo "Error: Please set and save the 'Core Module Links' before generating a plan.";
             return;
         }
 
-        // 1. Generate the plan array
         $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
         
-        // 2. Convert the plan to a JSON string
-        $planJson = json_encode($proposedPlan);
-
-        // 3. Update the 'value' of the 'CalibrationPlan' list element
-        $this->UpdateFormField('CalibrationPlan', 'value', $planJson);
-        
-        // 4. Provide non-blocking feedback to the user via the label
-        $this->UpdateFormField('ProposalStatusLabel', 'caption', 'Success! Proposed plan loaded below. Review and click "Apply" to save.');
-        $this->UpdateFormField('ProposalStatusLabel', 'color', '#008000'); // Green for success
-        $this->UpdateFormField('ProposalStatusLabel', 'visible', true);
+        $this->UpdateFormField('CalibrationPlan', 'value', json_encode($proposedPlan));
+        echo "A new calibration plan has been proposed successfully!";
     }
+
     public function StartCalibration()
     {
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
@@ -236,15 +219,8 @@ class HVAC_Learning_Orchestrator extends IPSModule
     {
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
         if ($zoningID == 0) return [];
-        // Use try-catch for robustness in case the other module is unavailable
-        try {
-            $roomConfigJson = ZDM_GetRoomConfigurations($zoningID);
-            $roomConfig = json_decode($roomConfigJson, true);
-        } catch (Exception $e) {
-            $this->LogMessage("Failed to get room configurations from Zoning Manager: " . $e->getMessage(), KL_ERROR);
-            return [];
-        }
-
+        $roomConfigJson = ZDM_GetRoomConfigurations($zoningID);
+        $roomConfig = json_decode($roomConfigJson, true);
         if (!is_array($roomConfig)) return [];
         
         $linkMap = [];
@@ -289,7 +265,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
             if ($flap['open']) $activeRooms[$flap['name']] = true;
         }
 
-        // Restore all to original to clear previous stage's settings
+        // Before setting new targets, first restore all to original to clear previous stage's settings
         $originalTargets = json_decode($this->ReadAttributeString('OriginalTargetTemps'), true);
         if (is_array($originalTargets)) {
              foreach ($originalTargets as $targetID => $value) {
@@ -297,7 +273,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
             }
         }
 
-        // Now set artificial targets only for active rooms
+        // Now set the artificial targets only for the active rooms in this stage
         foreach ($roomLinks as $name => $links) {
             if (isset($activeRooms[$name])) {
                 $targetID = $links['targetID'];
