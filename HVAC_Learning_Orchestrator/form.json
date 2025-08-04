@@ -18,18 +18,48 @@
         { "type": "Label", "label": " "},
         { "type": "Label", "label": "--- Automated Calibration Plan ---" },
         {
+            "type": "Button",
+            "label": "Generate Proposed Plan",
+            "caption": "Generate Proposed Plan",
+            "onClick": "ORCH_ProposePlan($id);"
+        },
+        {
             "type": "List",
             "name": "CalibrationPlan",
             "caption": "Calibration Plan",
             "add": true,
             "delete": true,
             "sort": { "column": "stageName", "direction": "ascending" },
-            "default": "[{\"stageName\":\"Stage 1: Low Demand Test (1 Zone)\",\"flapConfig\":\"Living Room=true, Kitchen=false\",\"targetOffset\":\"-0.5\",\"actionPattern\":\"30:30, 55:60, 75:90, 100:100\"},{\"stageName\":\"Stage 2: High Demand Test (All Zones)\",\"flapConfig\":\"Living Room=true, Kitchen=true\",\"targetOffset\":\"-5.0\",\"actionPattern\":\"30:30, 55:60, 75:90, 100:100\"},{\"stageName\":\"Stage 3: Coil Stress Test\",\"flapConfig\":\"Living Room=true, Kitchen=true\",\"targetOffset\":\"-5.0\",\"actionPattern\":\"100:90, 100:50, 100:30, 100:10, 75:10, 30:90\"}]",
             "columns": [
-                { "caption": "Stage Name", "name": "stageName", "width": "250px", "add": "New Stage" },
-                { "caption": "Flap Config", "name": "flapConfig", "width": "300px", "add": "Living Room=true, Kitchen=false", "info": "Comma-separated RoomName=true/false" },
-                { "caption": "Target Temp Offset (°C)", "name": "targetOffset", "width": "150px", "add": "-5.0" },
-                { "caption": "Action Pattern", "name": "actionPattern", "width": "auto", "add": "30:30, 55:60, 75:90, 100:100" }
+                {
+                    "caption": "Stage Name",
+                    "name": "stageName",
+                    "width": "250px",
+                    "add": "New Stage",
+                    "edit": { "type": "ValidationTextBox" }
+                },
+                {
+                    "caption": "Flap Config",
+                    "name": "flapConfig",
+                    "width": "300px",
+                    "add": "Living Room=true, Kitchen=false",
+                    "info": "Comma-separated RoomName=true/false",
+                    "edit": { "type": "ValidationTextBox" }
+                },
+                {
+                    "caption": "Target Temp Offset (°C)",
+                    "name": "targetOffset",
+                    "width": "150px",
+                    "add": "-5.0",
+                    "edit": { "type": "NumberSpinner", "digits": 1 }
+                },
+                {
+                    "caption": "Action Pattern",
+                    "name": "actionPattern",
+                    "width": "auto",
+                    "add": "30:30, 55:60, 75:90, 100:100",
+                    "edit": { "type": "ValidationTextBox" }
+                }
             ]
         }
     ],
