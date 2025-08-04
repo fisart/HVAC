@@ -48,22 +48,42 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     // --- Public User-Facing Functions ---
 
+    public function GetConfigurationForm()
+    {
+        // This function is now very simple. It just loads the form structure.
+        $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
+        
+        // It's still helpful to add a note if the core links are missing.
+        if ($this->ReadPropertyInteger('ZoningManagerID') == 0 || $this->ReadPropertyInteger('AdaptiveControlID') == 0) {
+            $form['elements'][] = [ 'type' => 'Label', 'label' => 'Please set the Core Module Links and click "Apply" before generating a plan.', 'bold' => true, 'color' => '#FF0000' ];
+        }
+        
+        return json_encode($form);
+    }
+
     public function ProposePlan()
     {
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
         $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
 
         if ($zoningID == 0 || $adaptiveID == 0) {
-            echo "Error: Please set and save the 'Core Module Links' before generating a plan.";
+            echo "Error: Please set and save the 'Core Module Links' before trying to generate a plan.";
             return;
         }
 
+        // 1. Generate the plan array using the existing helper function.
         $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
         
-        $this->UpdateFormField('CalibrationPlan', 'value', json_encode($proposedPlan));
-        echo "A new calibration plan has been proposed successfully!";
-    }
+        // 2. Convert the plan to a JSON string.
+        $planJson = json_encode($proposedPlan);
 
+        // --- THE MAGIC HAPPENS HERE ---
+        // 3. Update the 'value' of the 'CalibrationPlan' list element in the live form.
+        $this->UpdateFormField('CalibrationPlan', 'value', $planJson);
+        
+        // 4. Provide feedback to the user.
+        echo "A new plan has been proposed. Review the details and click 'Apply' at the top to save it.";
+    }
     public function StartCalibration()
     {
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
