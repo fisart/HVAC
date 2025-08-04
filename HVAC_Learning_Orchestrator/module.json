@@ -1,0 +1,18 @@
+{
+    "id": "{A0B1C2D3-E4F5-6789-ABCD-1234567890EF}",
+    "name": "HVAC Learning Orchestrator",
+    "type": 3,
+    "vendor": "Artur Fischer & AI Consultant",
+    "aliases": [
+        "HVAC Orchestrator",
+        "HVAC Calibration",
+        "Climate Control Self-Tuning"
+    ],
+    "parentRequirements": [
+        "{GUID-OF-ZONING-MANAGER-MODULE}",
+        "{GUID-OF-ADAPTIVE-HVAC-CONTROL-MODULE}"
+    ],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "ORCH"
+}
