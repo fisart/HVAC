@@ -2,7 +2,7 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       1.1 (Dynamic Plan Proposal)
+ * @version       1.2 (Final & Corrected)
  * @date          2023-10-27
  */
 
@@ -43,23 +43,16 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     public function GetConfigurationForm()
     {
-        return file_get_contents(__DIR__ . '/form.json');
-    }
-
-    // --- Public User-Facing Functions ---
-
-    public function GetConfigurationForm()
-    {
-        // This function is now very simple. It just loads the form structure.
         $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
         
-        // It's still helpful to add a note if the core links are missing.
         if ($this->ReadPropertyInteger('ZoningManagerID') == 0 || $this->ReadPropertyInteger('AdaptiveControlID') == 0) {
             $form['elements'][] = [ 'type' => 'Label', 'label' => 'Please set the Core Module Links and click "Apply" before generating a plan.', 'bold' => true, 'color' => '#FF0000' ];
         }
         
         return json_encode($form);
     }
+
+    // --- Public User-Facing Functions ---
 
     public function ProposePlan()
     {
@@ -71,19 +64,14 @@ class HVAC_Learning_Orchestrator extends IPSModule
             return;
         }
 
-        // 1. Generate the plan array using the existing helper function.
         $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
-        
-        // 2. Convert the plan to a JSON string.
         $planJson = json_encode($proposedPlan);
 
-        // --- THE MAGIC HAPPENS HERE ---
-        // 3. Update the 'value' of the 'CalibrationPlan' list element in the live form.
         $this->UpdateFormField('CalibrationPlan', 'value', $planJson);
         
-        // 4. Provide feedback to the user.
         echo "A new plan has been proposed. Review the details and click 'Apply' at the top to save it.";
     }
+
     public function StartCalibration()
     {
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
@@ -239,8 +227,15 @@ class HVAC_Learning_Orchestrator extends IPSModule
     {
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
         if ($zoningID == 0) return [];
-        $roomConfigJson = ZDM_GetRoomConfigurations($zoningID);
-        $roomConfig = json_decode($roomConfigJson, true);
+        // Use try-catch for robustness in case the other module is unavailable
+        try {
+            $roomConfigJson = ZDM_GetRoomConfigurations($zoningID);
+            $roomConfig = json_decode($roomConfigJson, true);
+        } catch (Exception $e) {
+            $this->LogMessage("Failed to get room configurations from Zoning Manager: " . $e->getMessage(), KL_ERROR);
+            return [];
+        }
+
         if (!is_array($roomConfig)) return [];
         
         $linkMap = [];
@@ -285,7 +280,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
             if ($flap['open']) $activeRooms[$flap['name']] = true;
         }
 
-        // Before setting new targets, first restore all to original to clear previous stage's settings
+        // Restore all to original to clear previous stage's settings
         $originalTargets = json_decode($this->ReadAttributeString('OriginalTargetTemps'), true);
         if (is_array($originalTargets)) {
              foreach ($originalTargets as $targetID => $value) {
@@ -293,7 +288,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
             }
         }
 
-        // Now set the artificial targets only for the active rooms in this stage
+        // Now set artificial targets only for active rooms
         foreach ($roomLinks as $name => $links) {
             if (isset($activeRooms[$name])) {
                 $targetID = $links['targetID'];
