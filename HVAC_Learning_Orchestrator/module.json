@@ -10,7 +10,7 @@
     ],
     "parentRequirements": [
         "{CE67653F-2712-207E-4AF4-0F7CBACBEDED}",
-        "{GUID-OF-ADAPTIVE-HVAC-CONTROL-MODULE}"
+        "{9619EE08-7F77-AF51-DAD5-2B6A08BDDD59}"
     ],
     "childRequirements": [],
     "implemented": [],
