@@ -16,17 +16,6 @@
             "required": true
         },
         { "type": "Label", "label": " "},
-        { "type": "Label", "label": "--- Room Configuration Links (for Level 4 Calibration) ---" },
-        {
-            "type": "List", "name": "RoomConfigLinks", "caption": "Room Configuration Links",
-            "add": true, "delete": true,
-            "columns": [
-                { "caption": "Room Name (must match Zoning Manager)", "name": "name", "width": "250px", "add": "" },
-                { "caption": "Current Temp. Variable", "name": "tempID", "width": "auto", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Target Temp. Variable", "name": "targetID", "width": "auto", "add": 0, "edit": { "type": "SelectVariable" } }
-            ]
-        },
-        { "type": "Label", "label": " "},
         { "type": "Label", "label": "--- Automated Calibration Plan ---" },
         {
             "type": "List",
