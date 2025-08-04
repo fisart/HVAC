@@ -47,6 +47,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MasterBedSpecialModeLink', 0);
         $this->RegisterPropertyInteger('MainStatusTextLink', 0);
         $this->RegisterPropertyString('ControlledRooms', '[]');
+        $this->RegisterPropertyBoolean('OverrideMode', false);
         $this->RegisterTimer('ProcessZoning', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
     }
 
@@ -62,6 +63,11 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function ProcessZoning()
     {
+        if ($this->ReadPropertyBoolean('OverrideMode')) {
+            // If in override mode, do nothing on the timer.
+            // All actions are triggered by the public API functions.
+            return;
+        }
         if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("--- START Zoning & Demand Check ---", KL_MESSAGE);
         if ($this->IsSystemOverridden()) {
             $this->SwitchSystemOff();
@@ -299,4 +305,81 @@ class Zoning_and_Demand_Manager extends IPSModule
     private function SwitchFan(bool $state) {
         $this->SetFanState($state);
     }
+        // ... at the end of the class, after private function SwitchFan(bool $state) ...
+
+    // START: Add entire block of new public functions
+
+    /**
+     * @brief Puts the module into an external override mode, disabling its internal logic.
+     * @param bool $isOverride TRUE to enable override, FALSE to return to normal operation.
+     */
+    public function SetOverrideMode(bool $isOverride)
+    {
+        IPS_SetProperty($this->InstanceID, 'OverrideMode', $isOverride);
+        if (IPS_HasChanges($this->InstanceID)) {
+            IPS_ApplyChanges($this->InstanceID);
+        }
+        $this->LogMessage("Override Mode set to: " . ($isOverride ? 'ON' : 'OFF'), KL_MESSAGE);
+
+        // If override is turned off, immediately re-run the logic to get back to a normal state.
+        if (!$isOverride) {
+            $this->ProcessZoning();
+        }
+    }
+
+    /**
+     * @brief Directly commands the main AC and Fan relays. Only works in Override Mode.
+     * @param bool $acOn State for the main AC unit.
+     * @param bool $fanOn State for the main Fan unit.
+     */
+    public function CommandSystem(bool $acOn, bool $fanOn)
+    {
+        if (!$this->ReadPropertyBoolean('OverrideMode')) {
+            $this->LogMessage("CommandSystem ignored: Module not in Override Mode.", KL_WARNING);
+            return;
+        }
+
+        $this->SetAcState($acOn);
+        $this->SetFanState($fanOn);
+        if ($this->ReadPropertyBoolean('Debug')) $this->LogMessage("CommandSystem executed: AC=" . ($acOn ? 'ON' : 'OFF') . ", Fan=" . ($fanOn ? 'ON' : 'OFF'), KL_DEBUG);
+    }
+
+    /**
+     * @brief Directly commands the flaps for a set of rooms. Only works in Override Mode.
+     * @param string $roomStatesJson A JSON string representing an array of room states, e.g., '[{"name":"Living Room","open":true}]'
+     */
+    public function CommandFlaps(string $roomStatesJson)
+    {
+        if (!$this->ReadPropertyBoolean('OverrideMode')) {
+            $this->LogMessage("CommandFlaps ignored: Module not in Override Mode.", KL_WARNING);
+            return;
+        }
+
+        $roomStates = json_decode($roomStatesJson, true);
+        if (!is_array($roomStates)) {
+            $this->LogMessage("CommandFlaps failed: Invalid JSON provided.", KL_ERROR);
+            return;
+        }
+
+        $allRooms = json_decode($this->ReadPropertyString('ControlledRooms'), true);
+        $flapCommands = [];
+
+        foreach ($roomStates as $state) {
+            $roomName = $state['name'] ?? null;
+            $isOpen = $state['open'] ?? null;
+
+            if ($roomName === null || $isOpen === null) continue;
+
+            foreach ($allRooms as $roomConfig) {
+                if (($roomConfig['name'] ?? '') === $roomName) {
+                    $this->SetFlapState($roomConfig, $isOpen);
+                    $flapCommands[] = "$roomName -> " . ($isOpen ? 'OPEN' : 'CLOSED');
+                    break; // Found the room, move to the next in the command list
+                }
+            }
+        }
+        if (!empty($flapCommands) && $this->ReadPropertyBoolean('Debug')) $this->LogMessage("CommandFlaps executed: " . implode(', ', $flapCommands), KL_DEBUG);
+    }
+
+    // END: Add entire block of new public functions
 }
