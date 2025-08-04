@@ -183,39 +183,73 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     // --- Private Helper Functions ---
 
-    private function generateProposedPlan(int $zoningID, int $adaptiveID): array
+   private function generateProposedPlan(int $zoningID, int $adaptiveID): array
     {
+        // 1. Discover Rooms from the Zoning Manager
         $roomNames = [];
         $roomConfigJson = ZDM_GetRoomConfigurations($zoningID);
         $roomConfig = json_decode($roomConfigJson, true);
         if (is_array($roomConfig)) {
             foreach ($roomConfig as $room) {
-                if (!empty($room['name'])) $roomNames[] = $room['name'];
+                if (!empty($room['name'])) {
+                    $roomNames[] = $room['name'];
+                }
             }
         }
-        if (empty($roomNames)) return [];
-
+        if (empty($roomNames)) {
+            $this->LogMessage("Plan generation failed: No rooms configured in Zoning Manager.", KL_WARNING);
+            return []; // Cannot generate a plan without rooms
+        }
+    
+        // 2. Discover Actions from the Adaptive Controller
         $allActionsJson = ACIPS_GetActionPairs($adaptiveID);
         $allActions = json_decode($allActionsJson, true);
-        
+    
+        // CORRECTED & ROBUST ACTION FILTERING LOGIC
         $actionPattern = array_values(array_filter($allActions, function($action) {
             list($p, $f) = explode(':', $action);
-            return $p != 0 && in_array($p, ['30', '55', '75', '100']) && in_array($f, ['30', '60', '90', '100']);
+            // We want actions that are not '0' and represent a good spread.
+            // Let's select all actions with power levels 30, 75, and 100
+            // and fan speeds 30, 70, and 90. This creates a solid 3x3 test matrix.
+            return $p != 0 && in_array($p, ['30', '75', '100']) && in_array($f, ['30', '70', '90']);
         }));
-        if (empty($actionPattern)) $actionPattern = ['55:50', '100:100'];
-
+    
+        if (empty($actionPattern)) {
+            // Fallback if the filter produces no results for some reason
+            $actionPattern = ['55:50', '100:100'];
+            $this->LogMessage("Could not generate a representative action pattern. Using fallback.", KL_WARNING);
+        }
+        $actionPatternString = implode(', ', $actionPattern);
+    
+        // 3. Build the Plan Stages
         $firstRoom = $roomNames[0];
         $allFlapsTrue = implode(', ', array_map(function($name) { return "$name=true"; }, $roomNames));
-        $singleFlapConfig = "$firstRoom=true";
-        if (count($roomNames) > 1) {
-             $otherFlaps = implode(', ', array_map(function($name) { return "$name=false"; }, array_slice($roomNames, 1)));
-             $singleFlapConfig .= ", " . $otherFlaps;
+        
+        $singleFlapConfigParts = [];
+        foreach($roomNames as $index => $name) {
+            $singleFlapConfigParts[] = ($index === 0) ? "$name=true" : "$name=false";
         }
-
+        $singleFlapConfig = implode(', ', $singleFlapConfigParts);
+    
         return [
-            ['stageName' => "Stage 1: Low Demand Test (1 Zone)", 'flapConfig' => $singleFlapConfig, 'targetOffset' => "-0.5", 'actionPattern' => implode(', ', $actionPattern) ],
-            ['stageName' => "Stage 2: High Demand Test (All Zones)", 'flapConfig' => $allFlapsTrue, 'targetOffset' => "-5.0", 'actionPattern' => implode(', ', $actionPattern) ],
-            ['stageName' => "Stage 3: Coil Stress Test", 'flapConfig' => $allFlapsTrue, 'targetOffset' => "-5.0", 'actionPattern' => "100:90, 100:50, 100:30, 100:10, 75:10, 30:90"]
+            [
+                'stageName'      => "Stage 1: Low Demand Test (1 Zone)",
+                'flapConfig'     => $singleFlapConfig,
+                'targetOffset'   => "-0.5",
+                'actionPattern'  => $actionPatternString
+            ],
+            [
+                'stageName'      => "Stage 2: High Demand Test (All Zones)",
+                'flapConfig'     => $allFlapsTrue,
+                'targetOffset'   => "-5.0",
+                'actionPattern'  => $actionPatternString
+            ],
+            [
+                'stageName'      => "Stage 3: Coil Stress Test",
+                'flapConfig'     => $allFlapsTrue,
+                'targetOffset'   => "-5.0",
+                'actionPattern'  => "100:90, 100:50, 100:30, 100:10, 75:10, 30:90"
+            ]
         ];
     }
 
