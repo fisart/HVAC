@@ -2,7 +2,7 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       2.2 (Typo Fix & Robustness)
+ * @version       2.3 (Hard Stop Command)
  * @date          2025-08-07
  */
 
@@ -83,13 +83,25 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $this->LogMessage("--- Calibration Stopped ---", KL_MESSAGE);
         $this->SetTimerInterval('CalibrationTimer', 0);
         $this->restoreOriginalTargets();
+        
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
         if ($zoningID > 0) {
             ZDM_CommandSystem($zoningID, false, false);
             ZDM_SetOverrideMode($zoningID, false);
         }
+        
         $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
-        if ($adaptiveID > 0) ACIPS_SetMode($adaptiveID, 'cooperative');
+        if ($adaptiveID > 0) {
+            // --- NEW: Explicitly command power and fan to 0 ---
+            // Force the final action to be "0:0" before changing modes.
+            // This ensures the value-based variables are reset correctly.
+            ACIPS_ForceActionAndLearn($adaptiveID, '0:0');
+            // --- END OF NEW CODE ---
+
+            // Now, set the mode back to cooperative for normal operation
+            ACIPS_SetMode($adaptiveID, 'cooperative');
+        }
+
         $this->WriteAttributeString('CalibrationStatus', 'Done');
         $this->SetStatus(203);
     }
@@ -117,7 +129,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
         $adaptiveID = $this->ReadPropertyInteger('AdaptiveControlID');
         $result = json_decode(ACIPS_ForceActionAndLearn($adaptiveID, $currentStage['actions'][$actionIdx]), true);
-        $this->LogMessage("Step {$stageIdx}:{$actionIdx} | Action: {$currentStage['actions'][$actionIdx]} | State: {$result['state']}, Reward: " . number_format($result['reward'], 2), KL_DEBUG);
+        $this->LogMessage("Step {$stageIdx}:{$actionIdx} | Action: {$currentStage['actions'][$actionIdx]} | State: " . ($result['state'] ?? 'N/A') . ", Reward: " . number_format($result['reward'] ?? 0, 2), KL_DEBUG);
 
         $actionIdx++;
         if ($actionIdx >= count($currentStage['actions'])) {
@@ -137,7 +149,6 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $allActions = json_decode(ACIPS_GetActionPairs($adaptiveID), true);
         if (!is_array($allActions)) return [];
         
-        // ** TYPO FIX WAS HERE **
         $actionPattern = array_values(array_filter($allActions, function($action) {
             list($p, $f) = explode(':', $action);
             return $p != 0 && in_array((string)$p, ['30', '75', '100'], true) && in_array((string)$f, ['30', '70', '90'], true);
@@ -206,7 +217,9 @@ class HVAC_Learning_Orchestrator extends IPSModule
     {
         $targets = [];
         foreach ($this->getRoomLinks() as $links) {
-            if ($links['targetID'] > 0 && IPS_VariableExists($links['targetID'])) $targets[$links['targetID']] = GetValue($links['targetID']);
+            if (($links['targetID'] > 0) && IPS_VariableExists($links['targetID'])) {
+                 $targets[$links['targetID']] = GetValue($links['targetID']);
+            }
         }
         $this->WriteAttributeString('OriginalTargetTemps', json_encode($targets));
     }
@@ -215,7 +228,11 @@ class HVAC_Learning_Orchestrator extends IPSModule
     {
         $targets = json_decode($this->ReadAttributeString('OriginalTargetTemps'), true);
         if (!is_array($targets)) return;
-        foreach ($targets as $id => $val) if (IPS_VariableExists($id)) SetValue($id, $val);
+        foreach ($targets as $id => $val) {
+            if (IPS_VariableExists($id)) {
+                SetValue($id, $val);
+            }
+        }
     }
 
     private function setArtificialTargets(array $stage)
@@ -224,7 +241,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $activeRooms = [];
         foreach ($stage['setup']['flaps'] as $flap) if ($flap['open']) $activeRooms[$flap['name']] = true;
         foreach ($this->getRoomLinks() as $name => $links) {
-            if (isset($activeRooms[$name]) && $links['targetID'] > 0 && $links['tempID'] > 0) {
+            if (isset($activeRooms[$name]) && ($links['targetID'] > 0) && ($links['tempID'] > 0) && IPS_VariableExists($links['targetID']) && IPS_VariableExists($links['tempID'])) {
                 SetValue($links['targetID'], GetValue($links['tempID']) + $stage['setup']['targetOffset']);
             }
         }
