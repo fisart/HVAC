@@ -2,8 +2,8 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       1.1 (Dynamic Plan Proposal)
- * @date          2023-10-27
+ * @version       1.2 (Debugging & HTML Output)
+ * @date          2023-10-28
  */
 
 class HVAC_Learning_Orchestrator extends IPSModule
@@ -19,6 +19,9 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $this->RegisterAttributeInteger('CurrentStageIndex', 0);
         $this->RegisterAttributeInteger('CurrentActionIndex', 0);
         $this->RegisterAttributeString('OriginalTargetTemps', '{}');
+
+        // New variable to store the HTML visualization of the plan
+        $this->RegisterVariableString('CalibrationPlanHTML', 'Calibration Plan (HTML)', '~HTMLBox', 10);
 
         $this->RegisterTimer('CalibrationTimer', 0, 'ORCH_RunNextStep($_IPS[\'TARGET\']);');
     }
@@ -58,10 +61,30 @@ class HVAC_Learning_Orchestrator extends IPSModule
             return;
         }
 
+        // Generate the plan array using the function with detailed logging
         $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
         
-        $this->UpdateFormField('CalibrationPlan', 'value', json_encode($proposedPlan));
-        echo "A new calibration plan has been proposed successfully!";
+        // Check if the plan was generated successfully before proceeding
+        if (!empty($proposedPlan)) {
+            // Existing logic: Update the form field for the user to see and edit
+            $this->UpdateFormField('CalibrationPlan', 'value', json_encode($proposedPlan));
+
+            // --- NEW LOGIC ---
+            // Generate the HTML version of the plan
+            $planHtml = $this->GeneratePlanHTML($proposedPlan);
+
+            // Save the HTML to the instance variable for webhook/WebFront access
+            $this->SetValue('CalibrationPlanHTML', $planHtml);
+            // --- END OF NEW LOGIC ---
+
+            echo "A new calibration plan has been proposed successfully! The list below is updated, and the HTML visualization is now available.";
+        } else {
+            // This message will be shown if the generation function returns an empty array
+            echo "Error: Failed to generate a valid calibration plan. Check the module's message log for detailed errors.";
+            
+            // Also clear the HTML visualization on failure
+            $this->SetValue('CalibrationPlanHTML', $this->GeneratePlanHTML([]));
+        }
     }
 
     public function StartCalibration()
@@ -155,45 +178,85 @@ class HVAC_Learning_Orchestrator extends IPSModule
         }
     }
 
+    // --- Private Helper Functions ---
+
     private function generateProposedPlan(int $zoningID, int $adaptiveID): array
     {
+        // Step 1: Log function entry and parameters
+        $this->LogMessage("--- generateProposedPlan: Starting plan generation. ZoningID: {$zoningID}, AdaptiveID: {$adaptiveID}", KL_MESSAGE);
+
+        // Step 2: Get and log room configurations
         $roomNames = [];
         $roomConfigJson = ZDM_GetRoomConfigurations($zoningID);
+        $this->LogMessage("generateProposedPlan: Raw room config JSON from Zoning Manager: " . substr($roomConfigJson, 0, 500) . "...", KL_DEBUG);
         $roomConfig = json_decode($roomConfigJson, true);
-        if (is_array($roomConfig)) {
-            foreach ($roomConfig as $room) {
-                if (!empty($room['name'])) $roomNames[] = $room['name'];
-            }
-        }
-        if (empty($roomNames)) {
-            $this->LogMessage("Plan generation failed: No rooms configured in Zoning Manager.", KL_WARNING);
+
+        if (!is_array($roomConfig)) {
+            $this->LogMessage("generateProposedPlan CRITICAL ERROR: Failed to decode JSON from Zoning Manager. Aborting.", KL_ERROR);
             return [];
         }
 
+        foreach ($roomConfig as $room) {
+            if (!empty($room['name'])) {
+                $roomNames[] = $room['name'];
+            }
+        }
+        
+        if (empty($roomNames)) {
+            $this->LogMessage("generateProposedPlan ERROR: No room names were parsed from the Zoning Manager's configuration. Aborting.", KL_ERROR);
+            return [];
+        }
+        $this->LogMessage("generateProposedPlan: Successfully parsed room names: " . implode(', ', $roomNames), KL_MESSAGE);
+
+        // Step 3: Get and log action pairs
         $allActionsJson = ACIPS_GetActionPairs($adaptiveID);
+        $this->LogMessage("generateProposedPlan: Raw action pairs JSON from Adaptive Controller: {$allActionsJson}", KL_DEBUG);
         $allActions = json_decode($allActionsJson, true);
         
+        if (!is_array($allActions)) {
+            $this->LogMessage("generateProposedPlan CRITICAL ERROR: Could not decode action pairs JSON from Adaptive Controller. Aborting.", KL_ERROR);
+            return [];
+        }
+        $this->LogMessage("generateProposedPlan: Successfully parsed " . count($allActions) . " action pairs.", KL_MESSAGE);
+
+        // Step 4: Filter actions and log the result
         $actionPattern = array_values(array_filter($allActions, function($action) {
             list($p, $f) = explode(':', $action);
-            return $p != 0 && in_array($p, ['30', '75', '100']) && in_array($f, ['30', '70', '90']);
+            return $p != 0 && in_array((string)$p, ['30', '75', '100'], true) && in_array((string)$f, ['30', '70', '90'], true);
         }));
-        if (empty($actionPattern)) $actionPattern = ['55:50', '100:100'];
-        $actionPatternString = implode(', ', $actionPattern);
 
-        $firstRoom = $roomNames[0];
-        $allFlapsTrue = implode(', ', array_map(function($name) { return "$name=true"; }, $roomNames));
+        $this->LogMessage("generateProposedPlan: Filtered action pattern resulted in: [" . implode(', ', $actionPattern) . "]", KL_MESSAGE);
+
+        if (empty($actionPattern)) {
+            $this->LogMessage("generateProposedPlan WARNING: Action pattern is empty after filtering. Falling back to default pattern.", KL_WARNING);
+            $actionPattern = ['55:50', '100:100'];
+        }
+        $actionPatternString = implode(', ', $actionPattern);
+        $this->LogMessage("generateProposedPlan: Final action pattern string for stages 1 & 2: '{$actionPatternString}'", KL_DEBUG);
+
+        // Step 5: Generate and log flap configuration strings
+        $allFlapsTrue = implode(', ', array_map(function($name) { return "{$name}=true"; }, $roomNames));
+        $this->LogMessage("generateProposedPlan: Generated 'All Flaps True' config: '{$allFlapsTrue}'", KL_DEBUG);
         
         $singleFlapConfigParts = [];
-        foreach($roomNames as $index => $name) {
-            $singleFlapConfigParts[] = ($index === 0) ? "$name=true" : "$name=false";
+        foreach ($roomNames as $index => $name) {
+            $singleFlapConfigParts[] = ($index === 0) ? "{$name}=true" : "{$name}=false";
         }
         $singleFlapConfig = implode(', ', $singleFlapConfigParts);
+        $this->LogMessage("generateProposedPlan: Generated 'Single Flap' config: '{$singleFlapConfig}'", KL_DEBUG);
 
-        return [
-            ['stageName' => "Stage 1: Low Demand Test (1 Zone)", 'flapConfig' => $singleFlapConfig, 'targetOffset' => "-0.5", 'actionPattern' => $actionPatternString ],
-            ['stageName' => "Stage 2: High Demand Test (All Zones)", 'flapConfig' => $allFlapsTrue, 'targetOffset' => "-5.0", 'actionPattern' => $actionPatternString ],
+        // Step 6: Construct and log the final plan
+        $finalPlan = [
+            ['stageName' => "Stage 1: Low Demand Test (1 Zone)", 'flapConfig' => $singleFlapConfig, 'targetOffset' => "-0.5", 'actionPattern' => $actionPatternString],
+            ['stageName' => "Stage 2: High Demand Test (All Zones)", 'flapConfig' => $allFlapsTrue, 'targetOffset' => "-5.0", 'actionPattern' => $actionPatternString],
             ['stageName' => "Stage 3: Coil Stress Test", 'flapConfig' => $allFlapsTrue, 'targetOffset' => "-5.0", 'actionPattern' => "100:90, 100:50, 100:30, 100:10, 75:10, 30:90"]
         ];
+
+        $this->LogMessage("generateProposedPlan: --- Final Proposed Plan Structure ---", KL_MESSAGE);
+        $this->LogMessage(print_r($finalPlan, true), KL_DEBUG);
+        $this->LogMessage("--- generateProposedPlan: Plan generation complete. ---", KL_MESSAGE);
+
+        return $finalPlan;
     }
 
     private function getCalibrationPlan(): array
@@ -284,5 +347,66 @@ class HVAC_Learning_Orchestrator extends IPSModule
                 }
             }
         }
+    }
+
+    /**
+     * @brief Formats a calibration plan array into a self-contained HTML table.
+     * @param array $plan The calibration plan array.
+     * @return string The generated HTML.
+     */
+    private function GeneratePlanHTML(array $plan): string
+    {
+        // Basic CSS for a clean look
+        $html = '<!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>HVAC Calibration Plan</title>
+            <style>
+                body { font-family: sans-serif; font-size: 14px; margin: 0; padding: 10px; background-color: #f8f9fa; }
+                table { width: 100%; border-collapse: collapse; margin-top: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); background-color: #ffffff; }
+                th, td { border: 1px solid #dee2e6; padding: 10px 12px; text-align: left; word-break: break-word; }
+                thead { background-color: #e9ecef; }
+                th { font-weight: 600; }
+                tbody tr:nth-child(odd) { background-color: #f2f2f2; }
+                h2 { color: #343a40; border-bottom: 2px solid #ced4da; padding-bottom: 5px; }
+            </style>
+        </head>
+        <body>
+            <h2>Generated Calibration Plan</h2>';
+
+        if (empty($plan)) {
+            $html .= '<p>No plan has been generated yet or the generation failed. Click "Generate Proposed Plan" to create one.</p>';
+            $html .= '</body></html>';
+            return $html;
+        }
+
+        $html .= '<table>
+                    <thead>
+                        <tr>
+                            <th>Stage Name</th>
+                            <th>Flap Configuration</th>
+                            <th>Target Offset</th>
+                            <th>Action Pattern</th>
+                        </tr>
+                    </thead>
+                    <tbody>';
+
+        foreach ($plan as $stage) {
+            $html .= '<tr>';
+            $html .= '<td>' . htmlspecialchars($stage['stageName'] ?? 'N/A') . '</td>';
+            $html .= '<td>' . htmlspecialchars($stage['flapConfig'] ?? 'N/A') . '</td>';
+            $html .= '<td>' . htmlspecialchars($stage['targetOffset'] ?? 'N/A') . ' &deg;C</td>';
+            $html .= '<td>' . htmlspecialchars($stage['actionPattern'] ?? 'N/A') . '</td>';
+            $html .= '</tr>';
+        }
+
+        $html .= '    </tbody>
+                  </table>
+                </body>
+                </html>';
+
+        return $html;
     }
 }
