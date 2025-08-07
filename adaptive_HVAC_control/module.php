@@ -2,7 +2,7 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       3.3 (Final Hardened Version)
+ * @version       3.4 (Definitive Fix for list() assignment)
  * @date          2025-08-07
  */
 
@@ -159,33 +159,53 @@ class adaptive_HVAC_control extends IPSModule
         if ($action !== '0:0' && $forcedAction === null) $this->decayEpsilon();
         
         $this->Log("State: {$currentState['string']} -> Action: $action (Reward: ".number_format($reward, 2).")", KL_MESSAGE);
+        $this->UpdateVisualization(); // Update visualization at the end of the cycle
         return ['state' => $currentState['string'], 'reward' => $reward];
     }
     
     // --- Helper Functions for Q-Learning ---
 
+    // =================================================================================
+    // THIS FUNCTION CONTAINED THE BUG AND HAS BEEN CORRECTED
+    // =================================================================================
     private function getCurrentState(array $rooms, array $meta): array
     {
         $coilTemp = GetValue($this->ReadPropertyInteger('CoilTempLink'));
         $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
+
+        // Correctly unpack the 4 values returned by the helper function
+        list($dBin, $oBin, $hotRoomCountBin, $rawWAD, $D_cold) = $this->discretizeRoomState($rooms);
+
+        // Calculate the coil-related state component here
+        $cBin = min(5, max(-2, (int)floor($coilTemp - $minCoil)));
         
-        list($cBin, $dBin, $oBin, $hotRoomCountBin, $rawWAD) = $this->discretizeRoomState($rooms);
+        // Get the coil trend
         $coilTrendBin = $this->getCoilTrendBin($coilTemp, $meta['coilTemp'] ?? $coilTemp);
         
+        // Assemble the final state string with all 5 correct components
         $stateString = ($this->ReadPropertyString('OperatingMode') === 'standalone')
             ? "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin"
             : "$dBin|$cBin|$coilTrendBin|$hotRoomCountBin";
             
-        return ['string' => $stateString, 'rawWAD' => $rawWAD, 'coilTemp' => $coilTemp, 'minCoil' => $minCoil];
+        return [
+            'string'   => $stateString,
+            'rawWAD'   => $rawWAD,
+            'D_cold'   => $D_cold,
+            'coilTemp' => $coilTemp,
+            'minCoil'  => $minCoil
+        ];
     }
     
     private function calculateReward(array $currentState, array $meta): float
     {
         list($prevP, $prevF) = array_map('intval', explode(':', $meta['action']));
+        
         $r_progress = ($meta['rawWAD'] ?? 0) - $currentState['rawWAD'];
         $r_freeze = -max(0, $currentState['minCoil'] - $currentState['coilTemp']) * 2;
         $r_energy = $this->calculateEnergyReward($prevP, $prevF);
-        return ($r_progress * 10) + $r_freeze + $r_energy;
+        $r_overcool = ($this->ReadPropertyString('OperatingMode') === 'standalone') ? (-$currentState['D_cold'] * 5) : 0;
+
+        return ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
     }
     
     private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, int $prevTs)
@@ -245,11 +265,11 @@ class adaptive_HVAC_control extends IPSModule
             } else {
                 for ($i = $stepProp; $i <= 100; $i += $stepProp) $levels[] = $i;
             }
-            return array_unique(array_filter($levels, fn($l) => $l > 0));
+            return array_unique(array_filter($levels, fn($l) => $l > 0 && $l <=100));
         };
 
-        $powerLevels = $getLevels('CustomPowerLevels', 20);
-        $fanLevels = $getLevels('CustomFanSpeeds', 20);
+        $powerLevels = $getLevels('CustomPowerLevels', $this->ReadPropertyInteger('PowerStep'));
+        $fanLevels = $getLevels('CustomFanSpeeds', $this->ReadPropertyInteger('FanStep'));
         
         $actions = ['0:0'];
         foreach ($powerLevels as $p) {
@@ -267,20 +287,23 @@ class adaptive_HVAC_control extends IPSModule
         
         foreach ($rooms as $room) {
             if ($isStandalone) {
-                if (($room['tempID'] ?? 0) > 0 && ($room['targetID'] ?? 0) > 0 && GetValue($room['tempID']) > (GetValue($room['targetID']) + ($room['threshold'] ?? 0.5))) return true;
+                if (($room['tempID'] ?? 0) > 0 && ($room['targetID'] ?? 0) > 0 && IPS_VariableExists($room['tempID']) && IPS_VariableExists($room['targetID']) && GetValue($room['tempID']) > (GetValue($room['targetID']) + ($room['threshold'] ?? 0.5))) return true;
             } else {
                 if (($room['demandID'] ?? 0) > 0 && IPS_VariableExists($room['demandID']) && GetValueInteger($room['demandID']) > 0) return true;
             }
         }
         return false;
     }
-
+    
+    // =================================================================================
+    // THIS FUNCTION'S RETURN VALUE IS NOW CORRECT (5 elements)
+    // =================================================================================
     private function discretizeRoomState(array $rooms): array
     {
         $wDevSum = 0.0; $totalSize = 0.0; $D_cold = 0.0; $hotRooms = 0; $maxDev = 0.0;
         if (is_array($rooms)) {
             foreach ($rooms as $room) {
-                if (!($room['tempID'] > 0 && $room['targetID'] > 0)) continue;
+                if (!($room['tempID'] > 0 && $room['targetID'] > 0 && IPS_VariableExists($room['tempID']) && IPS_VariableExists($room['targetID']))) continue;
                 $dev = GetValue($room['tempID']) - GetValue($room['targetID']);
                 if ($dev > 0) $maxDev = max($maxDev, $dev);
                 if ($dev < 0) $D_cold = max($D_cold, -$dev);
@@ -292,7 +315,7 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
         $rawWAD = ($totalSize > 0) ? ($wDevSum / $totalSize) : 0.0;
-        return [min(5,(int)floor($maxDev)), min(3,(int)floor($D_cold)), min(4,$hotRooms), $rawWAD];
+        return [min(5,(int)floor($maxDev)), min(3,(int)floor($D_cold)), min(4,$hotRooms), $rawWAD, $D_cold];
     }
     
     private function getCoilTrendBin(float $current, float $prev): int {
@@ -314,15 +337,16 @@ class adaptive_HVAC_control extends IPSModule
 
     private function ShutdownSystem(array $returnValue): array
     {
-        RequestAction($this->ReadPropertyInteger('PowerOutputLink'), 0);
-        RequestAction($this->ReadPropertyInteger('FanOutputLink'), 0);
+        $powerID = $this->ReadPropertyInteger('PowerOutputLink');
+        $fanID = $this->ReadPropertyInteger('FanOutputLink');
+        if ($powerID > 0 && IPS_VariableExists($powerID)) RequestAction($powerID, 0);
+        if ($fanID > 0 && IPS_VariableExists($fanID)) RequestAction($fanID, 0);
         return $returnValue;
     }
 
     private function GenerateQTableHTML(): string
     {
         $qTable = json_decode($this->ReadAttributeString('QTable'), true);
-        // --- HARDENING ---
         if (!is_array($qTable) || empty($qTable)) return '<p>Q-Table is empty or not yet initialized.</p>';
         
         ksort($qTable);
@@ -332,44 +356,37 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '</tr></thead><tbody>';
         
         $minQ = 0; $maxQ = 0;
-        // --- HARDENING ---
-        if (is_array($qTable)) {
-            foreach ($qTable as $stateActions) {
-                if (is_array($stateActions)) { // Check inner element too
-                    foreach ($stateActions as $qValue) {
-                        if ($qValue != self::OPTIMISTIC_INIT) {
-                            $minQ = min($minQ, $qValue);
-                            $maxQ = max($maxQ, $qValue);
-                        }
+        foreach ($qTable as $stateActions) {
+            if (is_array($stateActions)) {
+                foreach ($stateActions as $qValue) {
+                    if ($qValue != self::OPTIMISTIC_INIT) {
+                        $minQ = min($minQ, $qValue);
+                        $maxQ = max($maxQ, $qValue);
                     }
                 }
             }
         }
         
-        // --- HARDENING ---
-        if (is_array($qTable)) {
-            foreach ($qTable as $state => $stateActions) {
-                $html .= "<tr><td class='state-col'>{$state}</td>";
-                if(is_array($stateActions)) {
-                    foreach ($actions as $action) {
-                        $qValue = $stateActions[$action] ?? self::OPTIMISTIC_INIT;
-                        // Color generation logic...
-                        $color = '#f0f0f0'; // Default grey for unexplored
-                        if ($qValue != self::OPTIMISTIC_INIT) {
-                             if ($maxQ == $minQ) $color = '#90ee90'; // All same value, make green
-                             else if ($qValue >= 0) {
-                                 $p = ($maxQ > 0) ? ($qValue / $maxQ) : 0;
-                                 $color = sprintf('#%02x%02x%02x', 255 - (int)(100 * $p), 255, 255 - (int)(100 * $p));
-                             } else {
-                                 $p = ($minQ < 0) ? ($qValue / $minQ) : 0;
-                                 $color = sprintf('#%02x%02x%02x', 255, 255 - (int)(150 * $p), 255 - (int)(150 * $p));
-                             }
-                        }
-                        $html .= sprintf('<td style="background-color:%s;">%.2f</td>', $color, $qValue);
+        foreach ($qTable as $state => $stateActions) {
+            $html .= "<tr><td class='state-col'>{$state}</td>";
+            if(is_array($stateActions)) {
+                foreach ($actions as $action) {
+                    $qValue = $stateActions[$action] ?? self::OPTIMISTIC_INIT;
+                    $color = '#f0f0f0';
+                    if ($qValue != self::OPTIMISTIC_INIT) {
+                         if ($maxQ == $minQ) $color = '#90ee90';
+                         else if ($qValue >= 0) {
+                             $p = ($maxQ > 0) ? ($qValue / $maxQ) : 0;
+                             $color = sprintf('#%02x%02x%02x', 255 - (int)(100 * $p), 255, 255 - (int)(100 * $p));
+                         } else {
+                             $p = ($minQ < 0) ? ($qValue / $minQ) : 0;
+                             $color = sprintf('#%02x%02x%02x', 255, 255 - (int)(150 * $p), 255 - (int)(150 * $p));
+                         }
                     }
+                    $html .= sprintf('<td style="background-color:%s;">%.2f</td>', $color, $qValue);
                 }
-                $html .= '</tr>';
             }
+            $html .= '</tr>';
         }
         
         return $html . '</tbody></table></body></html>';
