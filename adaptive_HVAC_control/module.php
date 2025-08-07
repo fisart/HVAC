@@ -2,7 +2,7 @@
 /**
  * Adaptive HVAC Control
  *
- * Version: 3.0 (Orchestration API & Refactoring)
+ * Version: 3.1 (Hardened Action Generation)
  * Author: Artur Fischer
  * Co-Author / Review: AI Consultant
  */
@@ -264,8 +264,11 @@ class adaptive_HVAC_control extends IPSModule
         }
         
         $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
-        $isCoolingNeeded = false;
+        if (!is_array($monitoredRooms)) {
+            $monitoredRooms = []; // Ensure it's an array
+        }
         
+        $isCoolingNeeded = false;
         $operatingMode = $this->ReadPropertyString('OperatingMode');
 
         if ($operatingMode === 'cooperative' || $operatingMode === 'orchestrated') {
@@ -504,103 +507,122 @@ class adaptive_HVAC_control extends IPSModule
         $this->WriteAttributeFloat('Epsilon', max(0.01, $eps * (1 - $dec)));
     }
 
-   // In adaptive_HVAC_control/module.php
-
-private function _getActionPairs(): array
-{
-    // --- Power Levels ---
-    $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
-    $powerLevels = [];
-    if (!empty(trim($customPowerLevels))) {
-        // ... (this part is fine, no changes needed)
-        $parts = explode(',', $customPowerLevels);
-        foreach ($parts as $part) {
-            $value = intval(trim($part));
-            if ($value > 0 && $value <= 100) {
-                $powerLevels[] = $value;
+    /**
+     * @brief Generates the available action pairs (Power:Fan).
+     * @return array A list of action strings.
+     * 
+     * This function has been hardened to prevent type errors.
+     */
+    private function _getActionPairs(): array
+    {
+        // --- Power Levels ---
+        $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
+        $powerLevels = [];
+        if (!empty(trim($customPowerLevels))) {
+            $parts = explode(',', $customPowerLevels);
+            foreach ($parts as $part) {
+                $value = intval(trim($part));
+                if ($value > 0 && $value <= 100) {
+                    $powerLevels[] = $value;
+                }
+            }
+            $powerLevels = array_unique($powerLevels);
+            sort($powerLevels, SORT_NUMERIC);
+        } else {
+            $powerStep = $this->ReadPropertyInteger('PowerStep');
+            if ($powerStep <= 0) {
+                $this->LogMessage('PowerStep is 0 or invalid. Defaulting to 20 to prevent infinite loop.', KL_WARNING);
+                $powerStep = 20;
+            }
+            for ($p = $powerStep; $p <= 100; $p += $powerStep) {
+                $powerLevels[] = $p;
             }
         }
-        $powerLevels = array_unique($powerLevels);
-        sort($powerLevels, SORT_NUMERIC);
-    } else {
-        // Fallback to old PowerStep logic
-        $powerStep = $this->ReadPropertyInteger('PowerStep');
-        
-        // --- START OF FIX ---
-        // Explicitly check for 0 or negative values to prevent an infinite loop.
-        if ($powerStep <= 0) {
-            $this->LogMessage('PowerStep is 0 or invalid. Defaulting to 20 to prevent infinite loop.', KL_WARNING);
-            $powerStep = 20; // Default to a safe, non-zero value
+        if (empty($powerLevels)) {
+            $powerLevels = [100]; // Safety fallback
         }
-        // --- END OF FIX ---
 
-        for ($p = $powerStep; $p <= 100; $p += $powerStep) {
-            $powerLevels[] = $p;
-        }
-    }
-    if (empty($powerLevels)) {
-        $powerLevels = [100]; // Safety fallback
-    }
-
-    // --- Fan Levels ---
-    $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
-    $fanLevels = [];
-    if (!empty(trim($customFanSpeeds))) {
-        // ... (this part is fine, no changes needed)
-        $parts = explode(',', $customFanSpeeds);
-        foreach ($parts as $part) {
-            $value = intval(trim($part));
-            if ($value > 0 && $value <= 100) {
-                $fanLevels[] = $value;
+        // --- Fan Levels ---
+        $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
+        $fanLevels = [];
+        if (!empty(trim($customFanSpeeds))) {
+            $parts = explode(',', $customFanSpeeds);
+            foreach ($parts as $part) {
+                $value = intval(trim($part));
+                if ($value > 0 && $value <= 100) {
+                    $fanLevels[] = $value;
+                }
+            }
+            $fanLevels = array_unique($fanLevels);
+            sort($fanLevels, SORT_NUMERIC);
+        } else {
+            $fanStep = $this->ReadPropertyInteger('FanStep');
+            if ($fanStep <= 0) {
+                $this->LogMessage('FanStep is 0 or invalid. Defaulting to 20 to prevent infinite loop.', KL_WARNING);
+                $fanStep = 20;
+            }
+            for ($f = $fanStep; $f <= 100; $f += $fanStep) {
+                $fanLevels[] = $f;
             }
         }
-        $fanLevels = array_unique($fanLevels);
-        sort($fanLevels, SORT_NUMERIC);
-    } else {
-        $fanStep = $this->ReadPropertyInteger('FanStep');
-
-        // --- START OF FIX ---
-        // Explicitly check for 0 or negative values to prevent an infinite loop.
-        if ($fanStep <= 0) {
-            $this->LogMessage('FanStep is 0 or invalid. Defaulting to 20 to prevent infinite loop.', KL_WARNING);
-            $fanStep = 20; // Default to a safe, non-zero value
+        if (empty($fanLevels)) {
+            $fanLevels = [100]; // Safety fallback
         }
-        // --- END OF FIX ---
 
-        for ($f = $fanStep; $f <= 100; $f += $fanStep) {
-            $fanLevels[] = $f;
+        // --- Combine with Defensive Checks ---
+        $actions = ['0:0'];
+
+        // Defensive check: Ensure variables are arrays before looping
+        if (!is_array($powerLevels)) {
+            $this->LogMessage('_getActionPairs Error: $powerLevels is not an array! Defaulting to [100].', KL_ERROR);
+            $powerLevels = [100];
         }
-    }
-    if (empty($fanLevels)) {
-        $fanLevels = [100]; // Safety fallback
-    }
-
-    // --- Combine --- (this part is fine, no changes needed)
-    $actions = ['0:0'];
-    foreach ($powerLevels as $p) {
-        foreach ($fanLevels as $f) {
-            $actions[] = "{$p}:{$f}";
+        if (!is_array($fanLevels)) {
+            $this->LogMessage('_getActionPairs Error: $fanLevels is not an array! Defaulting to [100].', KL_ERROR);
+            $fanLevels = [100];
         }
-    }
 
-    if (!in_array("100:100", $actions)) {
-        $actions[] = "100:100";
+        foreach ($powerLevels as $p) {
+            foreach ($fanLevels as $f) {
+                $actions[] = "{$p}:{$f}";
+            }
+        }
+
+        if (!in_array("100:100", $actions)) {
+            $actions[] = "100:100";
+        }
+        return array_unique($actions);
     }
-    return array_unique($actions);
-}
     
     private function getAvailableActions(string $lastAction): array
     {
-        if ($lastAction === '0:0') { return $this->getActionPairs(); }
+        if ($lastAction === '0:0') {
+            return $this->getActionPairs();
+        }
+
         list($lastP, $lastF) = array_map('intval', explode(':', $lastAction));
         $maxPDelta = $this->ReadPropertyInteger('MaxPowerDelta');
         $maxFDelta = $this->ReadPropertyInteger('MaxFanDelta');
         $available = [];
-        foreach ($this->getActionPairs() as $pair) {
-            list($p, $f) = array_map('intval', explode(':', $pair));
-            if (abs($p - $lastP) <= $maxPDelta && abs($f - $lastF) <= $maxFDelta) { $available[] = $pair; }
+
+        $allPairs = $this->getActionPairs();
+
+        // Defensive check to prevent fatal errors on foreach
+        if (!is_array($allPairs)) {
+            $this->LogMessage('getAvailableActions Error: getActionPairs() did not return an array! Returning last action.', KL_ERROR);
+            return [$lastAction];
         }
-        if (empty($available)) $available[] = $lastAction;
+
+        foreach ($allPairs as $pair) {
+            list($p, $f) = array_map('intval', explode(':', $pair));
+            if (abs($p - $lastP) <= $maxPDelta && abs($f - $lastF) <= $maxFDelta) {
+                $available[] = $pair;
+            }
+        }
+
+        if (empty($available)) {
+            $available[] = $lastAction;
+        }
         return $available;
     }
     
