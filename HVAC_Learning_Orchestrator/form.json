@@ -71,10 +71,6 @@
         { "code": 102, "icon": "active", "caption": "Orchestrator is Idle." },
         { "code": 201, "icon": "repeat", "caption": "Calibration is Running." },
         { "code": 202, "icon": "error", "caption": "Module links are not configured." },
-        { 
-            "code": 203, 
-            "icon": "check", 
-            "caption": "Calibration is Done." 
-        }
+        { "code": 203, "icon": "ok", "caption": "Calibration is Done." }
     ]
 }
