@@ -2,7 +2,7 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       2.0 (Dynamic & Permutative Plan Generation)
+ * @version       2.1 (Robust Form Update)
  * @date          2025-08-07
  */
 
@@ -63,10 +63,23 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $proposedPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
         
         if (!empty($proposedPlan)) {
-            $this->UpdateFormField('CalibrationPlan', 'value', json_encode($proposedPlan));
+            // --- MODIFIED & MORE ROBUST METHOD TO UPDATE THE FORM ---
+            // 1. Set the property value directly
+            IPS_SetProperty($this->InstanceID, 'CalibrationPlan', json_encode($proposedPlan));
+
+            // 2. Check if there are changes and apply them to force a form refresh
+            if (IPS_HasChanges($this->InstanceID)) {
+                IPS_ApplyChanges($this->InstanceID);
+            }
+            // --- END OF MODIFICATION ---
+
+            // Update the HTML view as before
             $planHtml = $this->GeneratePlanHTML($proposedPlan);
             $this->SetValue('CalibrationPlanHTML', $planHtml);
-            echo "A new, comprehensive calibration plan has been proposed successfully! The list below and the HTML view have been updated.";
+            
+            // The message to the user now reflects the page reload
+            echo "A new calibration plan has been proposed. The form will now refresh to display it.";
+
         } else {
             echo "Error: Failed to generate a valid calibration plan. Check the module's message log for detailed errors.";
             $this->SetValue('CalibrationPlanHTML', $this->GeneratePlanHTML([]));
@@ -185,7 +198,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         }
         $actionPattern = array_values(array_filter($allActions, function($action) {
             list($p, $f) = explode(':', $action);
-            return $p != 0 && in_array((string)$p, ['30', '75', '100'], true) && in_array((string)$f, ['30', '70', '90'], true);
+            return $p != 0 && in_array((string)$p, ['30', '75', '100'], true) && in_-array((string)$f, ['30', '70', '90'], true);
         }));
         if (empty($actionPattern)) $actionPattern = ['55:50', '100:100'];
         $actionPatternString = implode(', ', $actionPattern);
