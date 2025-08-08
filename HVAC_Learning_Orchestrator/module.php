@@ -73,7 +73,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         ACIPS_SetMode($adaptiveID, 'orchestrated');
         ACIPS_ResetLearning($adaptiveID);
         ZDM_SetOverrideMode($zoningID, true);
-        ZDM_CommandSystem($zoningID, true, true);
+        ZDM_CommandSystem($zoningID, 100, 100);
         $this->RunNextStep();
         $this->SetTimerInterval('CalibrationTimer', 120 * 1000);
     }
@@ -86,7 +86,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         
         $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
         if ($zoningID > 0) {
-            ZDM_CommandSystem($zoningID, false, false);
+            ZDM_CommandSystem($zoningID, 0, 0);
             ZDM_SetOverrideMode($zoningID, false);
         }
         
@@ -122,7 +122,11 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $currentStage = $plan[$stageIdx];
         if ($actionIdx === 0) {
             $this->LogMessage("--- Starting Stage " . ($stageIdx + 1) . "/" . count($plan) . ": " . $currentStage['name'] . " ---", KL_MESSAGE);
-            ZDM_CommandFlaps($this->ReadPropertyInteger('ZoningManagerID'), json_encode($currentStage['setup']['flaps']));
+            ZDM_CommandFlaps(
+                $this->ReadPropertyInteger('ZoningManagerID'),
+                $currentStage['name'] ?? 'calibration',
+                json_encode($currentStage['setup']['flaps'])
+            );
             $this->setArtificialTargets($currentStage);
             IPS_Sleep(5000); 
         }
