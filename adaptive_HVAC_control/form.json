@@ -1,177 +1,129 @@
 {
-  "elements": [
-    { "type": "Label", "label": "--- Core Module Links ---" },
-    { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
-    { "type": "SelectVariable", "name": "PowerOutputLink", "caption": "Power Output Link" },
-    { "type": "SelectVariable", "name": "FanOutputLink", "caption": "Fan Output Link" },
-    { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
-    { "type": "SelectVariable", "name": "MinCoilTempLink", "caption": "Min Coil Temp Link" },
+  "translations": {
+    "en": {
+      "--- Core Module Links ---": "--- Core Module Links ---",
+      "AC Active Link": "AC Active Link",
+      "Power Output Link": "Power Output Link",
+      "Fan Output Link": "Fan Output Link",
+      "Coil Temperature Link": "Coil Temperature Link",
+      "Min Coil Temp Link": "Min Coil Temp Link",
 
-    { "type": "Label", "label": "--- Monitored Rooms ---" },
-    {
-      "type": "List",
-      "name": "MonitoredRooms",
-      "caption": "Monitored Rooms",
-      "add": true,
-      "delete": true,
-      "columns": [
-        {
-          "caption": "Room Name",
-          "name": "name",
-          "width": "150px",
-          "add": "New Room",
-          "edit": { "type": "ValidationTextBox" }
-        },
-        {
-          "caption": "Temp Sensor (IST)",
-          "name": "tempID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
-        {
-          "caption": "Target Temp (SOLL)",
-          "name": "targetID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
-        {
-          "caption": "Demand Output",
-          "name": "demandID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
-        {
-          "caption": "Room Size (m²)",
-          "name": "size",
-          "width": "100px",
-          "add": 20,
-          "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 200 }
-        },
-        {
-          "caption": "Threshold (°C)",
-          "name": "threshold",
-          "width": "100px",
-          "add": 0.5,
-          "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0.0, "maximum": 5.0 }
-        }
-      ]
-    },
+      "--- Monitored Rooms ---": "--- Monitored Rooms ---",
+      "Monitored Rooms": "Monitored Rooms",
+      "Room Name": "Room Name",
+      "Temp Sensor (IST)": "Temp Sensor (ACTUAL)",
+      "Target Temp (SOLL)": "Target Temp (SETPOINT)",
+      "Demand Output": "Demand Output",
+      "Room Size (m²)": "Room Size (m²)",
+      "Threshold (°C)": "Threshold (°C)",
 
-    { "type": "Label", "label": "--- Learning / Exploration ---" },
-    {
-      "type": "NumberSpinner",
-      "name": "EpsilonStart",
-      "caption": "Epsilon start",
-      "digits": 3,
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "value": 0.40
-    },
-    {
-      "type": "NumberSpinner",
-      "name": "EpsilonMin",
-      "caption": "Epsilon min",
-      "digits": 3,
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "value": 0.05
-    },
-    {
-      "type": "NumberSpinner",
-      "name": "EpsilonDecay",
-      "caption": "Epsilon decay (per step)",
-      "digits": 5,
-      "minimum": 0.90000,
-      "maximum": 0.99999,
-      "value": 0.995
-    },
+      "--- Learning / Exploration ---": "--- Learning / Exploration ---",
+      "Epsilon start": "Epsilon start",
+      "Epsilon min": "Epsilon min",
+      "Epsilon decay (per step)": "Epsilon decay (per step)",
 
-    { "type": "Label", "label": "--- Coil Safety ---" },
-    {
-      "type": "NumberSpinner",
-      "name": "MinCoilTemp",
-      "caption": "Min coil temperature (°C)",
-      "digits": 1,
-      "minimum": -5.0,
-      "maximum": 10.0,
-      "value": 2.0
-    },
-    {
-      "type": "NumberSpinner",
-      "name": "MaxCoilDropRate",
-      "caption": "Max coil drop rate (K/min)",
-      "digits": 2,
-      "minimum": 0.0,
-      "maximum": 10.0,
-      "value": 1.5
-    },
-    {
-      "type": "CheckBox",
-      "name": "AbortOnCoilFreeze",
-      "caption": "Abort on coil freeze indicators",
-      "value": true
-    },
+      "--- Coil Safety ---": "--- Coil Safety ---",
+      "Min coil temperature (°C)": "Min coil temperature (°C)",
+      "Max coil drop rate (K/min)": "Max coil drop rate (K/min)",
+      "Abort on coil freeze indicators": "Abort on coil freeze indicators",
 
-    { "type": "Label", "label": "--- ZDM Integration ---" },
-    {
-      "type": "SelectInstance",
-      "name": "ZDM_InstanceID",
-      "caption": "ZDM instance (for aggregates)"
-    },
+      "--- ZDM Integration ---": "--- ZDM Integration ---",
+      "ZDM instance (for aggregates)": "ZDM instance (for aggregates)",
 
-    { "type": "Label", "label": "--- System & Action Settings ---" },
-    { "type": "CheckBox", "name": "ManualOverride", "caption": "Manual Override" },
-    {
-      "type": "Select",
-      "name": "OperatingMode",
-      "caption": "Operating Mode",
-      "options": [
-        { "label": "Cooling", "value": 0 },
-        { "label": "Heating", "value": 1 },
-        { "label": "Auto", "value": 2 }
-      ]
-    },
-    {
-      "type": "Select",
-      "name": "LogLevel",
-      "caption": "Log Level",
-      "options": [
-        { "label": "Error only", "value": 0 },
-        { "label": "Warnings", "value": 1 },
-        { "label": "Info", "value": 2 },
-        { "label": "Debug (all messages)", "value": 3 }
-      ],
-      "value": 3
-    },
-    { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (learning rate)", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.05 },
-    { "type": "NumberSpinner", "name": "Gamma", "caption": "Gamma (discount factor)", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.9 },
-    { "type": "NumberSpinner", "name": "DecayRate", "caption": "Decay rate", "digits": 5, "minimum": 0.0, "maximum": 1.0, "value": 0.005 },
-    { "type": "ValidationTextBox", "name": "CustomPowerLevels", "caption": "Custom Power Levels (%)", "value": "0,40,80,100" },
-    { "type": "NumberSpinner", "name": "PowerStep", "caption": "Power Step (%)", "digits": 0, "minimum": 1, "maximum": 100, "value": 20 },
-    { "type": "ValidationTextBox", "name": "CustomFanSpeeds", "caption": "Custom Fan Speeds (%)", "value": "0,40,80,100" },
-    { "type": "NumberSpinner", "name": "FanStep", "caption": "Fan Step (%)", "digits": 0, "minimum": 1, "maximum": 100, "value": 20 },
-    { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "digits": 0, "minimum": 5, "maximum": 600, "value": 60 },
-    { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (°C)", "digits": 1, "minimum": 0.1, "maximum": 5.0, "value": 0.5 },
-    { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Delta (%)", "digits": 0, "minimum": 0, "maximum": 100, "value": 40 },
-    { "type": "NumberSpinner", "name": "MaxFanDelta", "caption": "Max Fan Delta (%)", "digits": 0, "minimum": 0, "maximum": 100, "value": 40 },
+      "--- System & Action Settings ---": "--- System & Action Settings ---",
+      "Manual Override": "Manual Override",
+      "Operating Mode": "Operating Mode",
+      "Cooling": "Cooling",
+      "Heating": "Heating",
+      "Auto": "Auto",
+      "Log Level": "Log Level",
+      "Error only": "Error only",
+      "Warnings": "Warnings",
+      "Info": "Info",
+      "Debug (all messages)": "Debug (all messages)",
+      "Alpha (learning rate)": "Alpha (learning rate)",
+      "Gamma (discount factor)": "Gamma (discount factor)",
+      "Decay rate": "Decay rate",
+      "Custom Power Levels (%)": "Custom Power Levels (%)",
+      "Power Step (%)": "Power Step (%)",
+      "Custom Fan Speeds (%)": "Custom Fan Speeds (%)",
+      "Fan Step (%)": "Fan Step (%)",
+      "Processing Interval (seconds)": "Processing Interval (seconds)",
+      "Hysteresis (°C)": "Hysteresis (°C)",
+      "Max Power Delta (%)": "Max Power Delta (%)",
+      "Max Fan Delta (%)": "Max Fan Delta (%)",
 
-    { "type": "Label", "label": "--- Persistence ---" },
-    {
-      "type": "ValidationTextBox",
-      "name": "QTablePath",
-      "caption": "Q-table file path (optional)",
-      "info": "Leave empty to store Q-table in attributes"
+      "--- Persistence ---": "--- Persistence ---",
+      "Q-table file path (optional)": "Q-table file path (optional)",
+      "Leave empty to store Q-table in attributes": "Leave empty to store Q-table in attributes",
+
+      "Reset Learning": "Reset Learning",
+      "Update Visualization": "Update Visualization",
+      "Active": "Active",
+      "Configuration incomplete": "Configuration incomplete"
+    },
+    "de": {
+      "--- Core Module Links ---": "--- Kern-Modulverknüpfungen ---",
+      "AC Active Link": "AC Aktiv-Link",
+      "Power Output Link": "Leistungs-Ausgangslink",
+      "Fan Output Link": "Lüfter-Ausgangslink",
+      "Coil Temperature Link": "Verdampfer-Temperatur-Link",
+      "Min Coil Temp Link": "Min. Verdampfer-Temp.-Link",
+
+      "--- Monitored Rooms ---": "--- Überwachte Räume ---",
+      "Monitored Rooms": "Überwachte Räume",
+      "Room Name": "Raumname",
+      "Temp Sensor (IST)": "Temperatursensor (IST)",
+      "Target Temp (SOLL)": "Zieltemperatur (SOLL)",
+      "Demand Output": "Bedarfsausgabe",
+      "Room Size (m²)": "Raumgröße (m²)",
+      "Threshold (°C)": "Schwellwert (°C)",
+
+      "--- Learning / Exploration ---": "--- Lernen / Exploration ---",
+      "Epsilon start": "Epsilon-Start",
+      "Epsilon min": "Epsilon-Minimum",
+      "Epsilon decay (per step)": "Epsilon-Abnahme (pro Schritt)",
+
+      "--- Coil Safety ---": "--- Verdampfer-Schutz ---",
+      "Min coil temperature (°C)": "Min. Verdampfertemperatur (°C)",
+      "Max coil drop rate (K/min)": "Max. Temperaturabfallrate (K/min)",
+      "Abort on coil freeze indicators": "Abbrechen bei Vereisungsindikatoren",
+
+      "--- ZDM Integration ---": "--- ZDM-Integration ---",
+      "ZDM instance (for aggregates)": "ZDM-Instanz (für Aggregate)",
+
+      "--- System & Action Settings ---": "--- System- & Aktions-Einstellungen ---",
+      "Manual Override": "Manueller Override",
+      "Operating Mode": "Betriebsmodus",
+      "Cooling": "Kühlen",
+      "Heating": "Heizen",
+      "Auto": "Auto",
+      "Log Level": "Protokollstufe",
+      "Error only": "Nur Fehler",
+      "Warnings": "Warnungen",
+      "Info": "Info",
+      "Debug (all messages)": "Debug (alle Meldungen)",
+      "Alpha (learning rate)": "Alpha (Lernrate)",
+      "Gamma (discount factor)": "Gamma (Abzinsungsfaktor)",
+      "Decay rate": "Abklingrate",
+      "Custom Power Levels (%)": "Eigene Leistungsstufen (%)",
+      "Power Step (%)": "Leistungsschritt (%)",
+      "Custom Fan Speeds (%)": "Eigene Lüfterstufen (%)",
+      "Fan Step (%)": "Lüfterschritt (%)",
+      "Processing Interval (seconds)": "Verarbeitungsintervall (Sekunden)",
+      "Hysteresis (°C)": "Hysterese (°C)",
+      "Max Power Delta (%)": "Max. Leistungsänderung (%)",
+      "Max Fan Delta (%)": "Max. Lüfteränderung (%)",
+
+      "--- Persistence ---": "--- Persistenz ---",
+      "Q-table file path (optional)": "Q-Table-Dateipfad (optional)",
+      "Leave empty to store Q-table in attributes": "Leer lassen, um Q-Table in Attributen zu speichern",
+
+      "Reset Learning": "Lernen zurücksetzen",
+      "Update Visualization": "Visualisierung aktualisieren",
+      "Active": "Aktiv",
+      "Configuration incomplete": "Konfiguration unvollständig"
     }
-  ],
-  "actions": [
-    { "type": "Button", "label": "Reset Learning", "onClick": "ADHVAC_ResetLearning($id);" },
-    { "type": "Button", "label": "Update Visualization", "onClick": "ADHVAC_UpdateVisualization($id);" }
-  ],
-  "status": [
-    { "code": 102, "icon": "active", "caption": "Active" },
-    { "code": 202, "icon": "error", "caption": "Configuration incomplete" }
-  ]
+  }
 }
+
