@@ -5,7 +5,6 @@
     { "type": "SelectVariable", "name": "PowerOutputLink", "caption": "Power Output Link" },
     { "type": "SelectVariable", "name": "FanOutputLink", "caption": "Fan Output Link" },
     { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
-    { "type": "SelectVariable", "name": "MinCoilTempLink", "caption": "Min Coil Temp Link" },
 
     { "type": "Label", "label": "--- Monitored Rooms ---" },
     {
@@ -30,7 +29,8 @@
     { "type": "NumberSpinner", "name": "EpsilonDecay", "caption": "Epsilon decay (per step)", "digits": 5, "minimum": 0.90000, "maximum": 0.99999, "value": 0.995 },
 
     { "type": "Label", "label": "--- Coil Safety ---" },
-    { "type": "NumberSpinner", "name": "MinCoilTemp", "caption": "Min coil temperature (°C)", "digits": 1, "minimum": -5.0, "maximum": 10.0, "value": 2.0 },
+    { "type": "NumberSpinner", "name": "MinCoilTempLearning", "caption": "Min Coil Temp (Learning, °C)", "digits": 1, "minimum": -5.0, "maximum": 10.0, "value": 2.0 },
+    { "type": "SelectVariable", "name": "EmergencyCoilTempLink", "caption": "Emergency Coil Temp Link" },
     { "type": "NumberSpinner", "name": "MaxCoilDropRate", "caption": "Max coil drop rate (K/min)", "digits": 2, "minimum": 0.0, "maximum": 10.0, "value": 1.5 },
     { "type": "CheckBox", "name": "AbortOnCoilFreeze", "caption": "Abort on coil freeze indicators", "value": true },
 
@@ -39,16 +39,6 @@
 
     { "type": "Label", "label": "--- System & Action Settings ---" },
     { "type": "CheckBox", "name": "ManualOverride", "caption": "Manual Override" },
-    {
-      "type": "Select",
-      "name": "OperatingMode",
-      "caption": "Operating Mode",
-      "options": [
-        { "label": "Cooling", "value": 0 },
-        { "label": "Heating", "value": 1 },
-        { "label": "Auto", "value": 2 }
-      ]
-    },
     {
       "type": "Select",
       "name": "LogLevel",
@@ -77,8 +67,8 @@
     { "type": "ValidationTextBox", "name": "QTablePath", "caption": "Q-table file path (optional)", "info": "Leave empty to store Q-table in attributes" }
   ],
   "actions": [
-    { "type": "Button", "label": "Reset Learning", "onClick": "ADHVAC_ResetLearning($id);" },
-    { "type": "Button", "label": "Update Visualization", "onClick": "ADHVAC_UpdateVisualization($id);" }
+    { "type": "Button", "label": "Reset Learning", "onClick": "ACIPS_ResetLearning($id);" },
+    { "type": "Button", "label": "Update Visualization", "onClick": "ACIPS_UpdateVisualization($id);" }
   ],
   "status": [
     { "code": 102, "icon": "active", "caption": "Active" },
