@@ -612,28 +612,36 @@ class adaptive_HVAC_control extends IPSModule
     {
         $powers = $this->parseIntList($this->ReadPropertyString('CustomPowerLevels'), 0, 100, $this->ReadPropertyInteger('PowerStep'));
         $fans   = $this->parseIntList($this->ReadPropertyString('CustomFanSpeeds'),   0, 100, $this->ReadPropertyInteger('FanStep'));
-
+    
         $map = [];
         foreach ($powers as $p) {
             foreach ($fans as $f) {
                 $map[$p.':'.$f] = true;
             }
         }
+    
+        // --- ALWAYS allow hard-off ---
+        $map['0:0'] = true;
+    
         return $map;
     }
-
     private function validateActionPair(string $pair): ?array
     {
         if (!preg_match('/^\s*(\d{1,3})\s*:\s*(\d{1,3})\s*$/', $pair, $m)) return null;
         $p = min(100, max(0, (int)$m[1]));
         $f = min(100, max(0, (int)$m[2]));
-
+    
+        // --- ALWAYS allow hard-off ---
+        if ($p === 0 && $f === 0) {
+            return [0, 0];
+        }
+    
         $allowed = $this->getAllowedActionPairs();
         if (!$allowed) return [$p, $f];
-
+    
         $key = $p.':'.$f;
         if (isset($allowed[$key])) return [$p, $f];
-
+    
         $best = $this->nearestAction($p, $f, array_keys($allowed));
         [$p, $f] = array_map('intval', explode(':', $best));
         $this->log(1, 'action_adjusted_to_allowed', ['req'=>$key,'adj'=>$best]);
