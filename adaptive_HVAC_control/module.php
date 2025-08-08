@@ -2,16 +2,17 @@
 /**
  * Adaptive HVAC Control 
  *
- * Version: 2.8.1 (Prefix fix, Epsilon-Schedule, Coil-Watchdog, ZDM Aggregates, Atomic Q-Persist, Console Logging)
+ * Version: 2.8.2 (Naming cleanup, dual coil limits, migrations, prefix fix)
  * Author:  Artur Fischer & AI Consultant
  *
- * Kurz:
- *  - Q-Learning-basierte Stellgrößenwahl (Power/Fan)
- *  - Epsilon-Exploration mit Start/Min/Decay
- *  - Coil-Schutz (MinTemp/DropRate) → Aktion 0:0 bei Gefahr
- *  - ZDM-Aggregate optional als State-Features
- *  - Q-Table atomar in Datei (optional) oder Attribut
- *  - Alle Logs im Symcon-Meldungsfenster (IPS_LogMessage via $this->LogMessage)
+ * - Q-Learning mit Epsilon (Start/Min/Decay)
+ * - Coil-Schutz:
+ *     * Emergency cutoff via EmergencyCoilTempLink (hard stop, z.B. ≤ 0 °C)
+ *     * Learning limit via MinCoilTempLearning (z.B. 2 °C)
+ *     * Drop-rate Watchdog
+ * - ZDM-Aggregate optional im State
+ * - Q-Table atomar in Datei (optional) oder Attribut
+ * - Konsistentes Logging in Meldungen
  */
 
 declare(strict_types=1);
@@ -24,9 +25,9 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::Create();
 
-        // Bestehende Properties (aus deiner Form)
+        // Bestehende Properties
         $this->RegisterPropertyBoolean('ManualOverride', false);
-        $this->RegisterPropertyInteger('LogLevel', 3);                 // 0=ERROR,1=WARN,2=INFO,3=DEBUG
+        $this->RegisterPropertyInteger('LogLevel', 3); // 0=ERROR,1=WARN,2=INFO,3=DEBUG
 
         $this->RegisterPropertyFloat('Alpha', 0.05);
         $this->RegisterPropertyFloat('Gamma', 0.90);
@@ -51,19 +52,24 @@ class adaptive_HVAC_control extends IPSModule
         // Sensoren
         $this->RegisterPropertyInteger('CoilTempLink', 0);
 
-        // Monitored Rooms (aus deiner Form)
+        // Räume
         $this->RegisterPropertyString('MonitoredRooms', '[]');
 
-        // -------------------- NEU --------------------
-
-        // Exploration / Epsilon
+        // --- NEU: Epsilon ---
         $this->RegisterPropertyFloat('EpsilonStart', 0.40);
         $this->RegisterPropertyFloat('EpsilonMin',   0.05);
         $this->RegisterPropertyFloat('EpsilonDecay', 0.995);
 
-        // Coil / Safety
-        $this->RegisterPropertyFloat('MinCoilTemp', 2.0);          // °C
-        $this->RegisterPropertyFloat('MaxCoilDropRate', 1.5);      // K/min
+        // --- NEU: Coil-Safety (neue Namen) ---
+        $this->RegisterPropertyFloat('MinCoilTempLearning', 2.0);     // learning limit, °C
+        $this->RegisterPropertyInteger('EmergencyCoilTempLink', 0);   // emergency cutoff variable link
+
+        // --- ALT (deprecated) für Migration ---
+        $this->RegisterPropertyFloat('MinCoilTemp', 2.0);             // will migrate into MinCoilTempLearning
+        $this->RegisterPropertyInteger('MinCoilTempLink', 0);         // will migrate into EmergencyCoilTempLink
+
+        // --- Weitere Schutz-Parameter ---
+        $this->RegisterPropertyFloat('MaxCoilDropRate', 1.5);         // K/min
         $this->RegisterPropertyBoolean('AbortOnCoilFreeze', true);
 
         // ZDM-Integration
@@ -74,10 +80,10 @@ class adaptive_HVAC_control extends IPSModule
 
         // Attribute
         $this->RegisterAttributeFloat('Epsilon', 0.0);
-        $this->RegisterAttributeString('QTable', '{}');            // Fallback, wenn kein Dateipfad
+        $this->RegisterAttributeString('QTable', '{}');
         $this->RegisterAttributeString('LastAction', '0:0');
 
-        // Timer -> **use module prefix wrapper** (module.json likely has "prefix":"ACIPS")
+        // Timer → wrapper via module.json prefix (assumed "ACIPS")
         $this->RegisterTimer('LearningTimer', 0, 'ACIPS_ProcessLearning($_IPS[\'TARGET\']);');
     }
 
@@ -85,8 +91,24 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::ApplyChanges();
 
-        $ok = true;
-        $this->SetStatus($ok ? 102 : 202);
+        // ---- Migration alt -> neu (nur einmalig, wenn neu leer/Default) ----
+        // MinCoilTemp -> MinCoilTempLearning
+        $minLearn = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
+        $minOld   = (float)$this->ReadPropertyFloat('MinCoilTemp');
+        if (abs($minLearn - 2.0) < 0.0001 && abs($minOld - 2.0) > 0.0001) {
+            // Nutzer hatte alten Wert ≠ Default gesetzt → übernehmen
+            IPS_SetProperty($this->InstanceID, 'MinCoilTempLearning', $minOld);
+        }
+        // MinCoilTempLink -> EmergencyCoilTempLink
+        $emergLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
+        $oldLink   = (int)$this->ReadPropertyInteger('MinCoilTempLink');
+        if ($emergLink === 0 && $oldLink > 0) {
+            IPS_SetProperty($this->InstanceID, 'EmergencyCoilTempLink', $oldLink);
+        }
+        // Commit migrations if any were changed
+        IPS_ApplyChanges($this->InstanceID); // safe: reenters but properties now final
+
+        $this->SetStatus(102);
 
         $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
         $this->SetTimerInterval('LearningTimer', $intervalMs);
@@ -131,13 +153,8 @@ class adaptive_HVAC_control extends IPSModule
         $this->persistQTableIfNeeded();
     }
 
-    // -------------------- Orchestrator-API (Forcing) --------------------
+    // -------------------- Orchestrator API (global wrapper: ACIPS_ForceActionAndLearn) --------------------
 
-    /**
-     * Forciert eine Aktion "P:F" (z. B. "55:70") und lernt aus dem Outcome.
-     * Exploration ist in diesem Pfad **aus**.
-     * Global wrapper is ACIPS_ForceActionAndLearn($InstanceID, $pair)
-     */
     public function ForceActionAndLearn(string $pair): string
     {
         if (!$this->coilProtectionOk()) {
@@ -163,6 +180,22 @@ class adaptive_HVAC_control extends IPSModule
         $this->persistQTableIfNeeded();
 
         return json_encode(['ok'=>true, 'applied'=>['p'=>$p,'f'=>$f], 'reward'=>$reward]);
+    }
+
+    // -------------------- Buttons (placeholders so form actions work) --------------------
+
+    public function ResetLearning(): void
+    {
+        $this->initExploration();
+        $this->storeQTable([]); // clear
+        $this->persistQTableIfNeeded();
+        $this->log(2, 'reset_learning');
+    }
+
+    public function UpdateVisualization(): void
+    {
+        // Hook for your UI; keep as no-op for now
+        $this->log(3, 'update_visualization');
     }
 
     // -------------------- Learning Core --------------------
@@ -269,29 +302,40 @@ class adaptive_HVAC_control extends IPSModule
             $penalty = -0.002 * ($dp + $df);
         }
 
-        $reward = $comfort + $energy + $window + $penalty;
-        return (float)round($reward, 4);
+        return (float)round($comfort + $energy + $window + $penalty, 4);
     }
 
     // -------------------- Coil / Safety --------------------
 
     private function coilProtectionOk(): bool
     {
+        // 1) Emergency cutoff via linked variable (hard stop)
+        $emergencyLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
+        if ($emergencyLink > 0 && IPS_VariableExists($emergencyLink)) {
+            $emergencyTemp = @GetValue($emergencyLink);
+            if (is_numeric($emergencyTemp) && $emergencyTemp <= 0.0) {
+                $this->log(0, 'coil_emergency_cutoff', ['temp' => (float)$emergencyTemp]);
+                return false;
+            }
+        }
+
+        // 2) Learning coil freeze protection (soft limit)
         if (!$this->ReadPropertyBoolean('AbortOnCoilFreeze')) return true;
 
-        $link = (int)$this->ReadPropertyInteger('CoilTempLink');
-        if ($link <= 0 || !IPS_VariableExists($link)) return true;
+        $coilLink = (int)$this->ReadPropertyInteger('CoilTempLink');
+        if ($coilLink <= 0 || !IPS_VariableExists($coilLink)) return true;
 
-        $coil = @GetValue($link);
+        $coil = @GetValue($coilLink);
         if (!is_numeric($coil)) return true;
 
         $coil = (float)$coil;
-        $min  = (float)$this->ReadPropertyFloat('MinCoilTemp');
-        if ($coil <= $min) {
-            $this->log(1, 'coil_below_min', ['coil'=>$coil,'min'=>$min]);
+        $minLearning = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
+        if ($coil <= $minLearning) {
+            $this->log(1, 'coil_below_learning_min', ['coil' => $coil, 'min' => $minLearning]);
             return false;
         }
 
+        // 3) Drop rate protection
         $now  = time();
         $key  = 'coil_last';
         $last = $this->GetBuffer($key);
@@ -299,15 +343,16 @@ class adaptive_HVAC_control extends IPSModule
             $obj = json_decode($last, true);
             if (isset($obj['t'],$obj['v']) && is_numeric($obj['t']) && is_numeric($obj['v'])) {
                 $dt = max(1, $now - (int)$obj['t']);
-                $rate = ((float)$obj['v'] - $coil) * 60.0 / $dt; // positiv = fällt
+                $rate = ((float)$obj['v'] - $coil) * 60.0 / $dt; // positive = falling
                 $maxDrop = (float)$this->ReadPropertyFloat('MaxCoilDropRate');
                 if ($rate > $maxDrop) {
-                    $this->log(1, 'coil_drop_rate', ['rate_K_min'=>$rate,'max'=>$maxDrop]);
+                    $this->log(1, 'coil_drop_rate', ['rate_K_min' => $rate, 'max' => $maxDrop]);
                     return false;
                 }
             }
         }
-        $this->SetBuffer($key, json_encode(['t'=>$now,'v'=>$coil]));
+        $this->SetBuffer($key, json_encode(['t' => $now, 'v' => $coil]));
+
         return true;
     }
 
@@ -420,10 +465,10 @@ class adaptive_HVAC_control extends IPSModule
         if ($varID <= 0 || !IPS_VariableExists($varID)) return;
         $vt = IPS_GetVariable($varID)['VariableType'] ?? -1;
         switch ($vt) {
-            case 0: @RequestAction($varID, $val >= 1); break;     // bool → on/off
-            case 1: @RequestAction($varID, (int)$val); break;      // int
-            case 2: @RequestAction($varID, (float)$val); break;    // float
-            case 3: @RequestAction($varID, (string)$val); break;   // string
+            case 0: @RequestAction($varID, $val >= 1); break;   // bool → on/off
+            case 1: @RequestAction($varID, (int)$val); break;   // int
+            case 2: @RequestAction($varID, (float)$val); break; // float
+            case 3: @RequestAction($varID, (string)$val); break;// string
             default: @SetValue($varID, $val); break;
         }
     }
@@ -521,7 +566,7 @@ class adaptive_HVAC_control extends IPSModule
 
     private function roomWindowOpen(array $room): bool
     {
-        // Fensterlogik liegt im ZDM; hier nur Platzhalter
+        // Fensterlogik ggf. via ZDM
         return false;
     }
 
@@ -544,9 +589,6 @@ class adaptive_HVAC_control extends IPSModule
 
     // -------------------- Logging --------------------
 
-    /**
-     * $lvl: 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG
-     */
     private function log(int $lvl, string $event, array $data = []): void
     {
         $cfg = (int)$this->ReadPropertyInteger('LogLevel');
@@ -562,7 +604,6 @@ class adaptive_HVAC_control extends IPSModule
         elseif ($lvl === 1) $prio = KL_WARNING;
 
         $this->LogMessage("ADHVAC ".$line, $prio);
-        // Optional:
-        // $this->SendDebug('ADHVAC', $line, 0);
+        // Optional: $this->SendDebug('ADHVAC', $line, 0);
     }
 }
