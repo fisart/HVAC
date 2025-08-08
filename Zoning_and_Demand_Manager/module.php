@@ -285,7 +285,10 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         return json_encode($agg);
     }
-
+    public function GetRoomConfigurations(): string
+    {
+        return $this->ReadPropertyString('ControlledRooms');
+    }
     // ---------- Intern: Flaps/System ----------
 
     private function applyAllFlaps(bool $open): void
