@@ -165,57 +165,62 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     $this->LogMessage("ORCH: StopCalibration triggered. ZDM={$zoningID}, ADAPT={$adaptiveID}", KL_MESSAGE);
 
-    // ZDM Override ausschalten
-    if ($zoningID > 0 && function_exists('ZDM_SetOverrideMode')) {
-        $this->LogMessage("ORCH: Sending Override=false to ZDM instance {$zoningID}", KL_MESSAGE);
-        ZDM_SetOverrideMode($zoningID, false);
+    // 1) Override im ZDM ausschalten
+    if ($zoningID > 0) {
+        if (function_exists('ZDM_SetOverrideMode')) {
+            $this->LogMessage("ORCH: Sending Override=false to ZDM instance {$zoningID}", KL_MESSAGE);
+            ZDM_SetOverrideMode($zoningID, false);
 
-        // Verifikation: OverrideActive in der ZDM-Instanz prüfen
-        $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
-        if ($vid) {
-            $val = (bool) @GetValue($vid);
-            $this->LogMessage('ORCH: ZDM OverrideActive after StopCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
-        } else {
-            $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StopCalibration)', KL_WARNING);
-        }
-    } else {
-        if ($zoningID === 0) {
-            $this->LogMessage("ORCH: No ZDM instance linked – cannot set Override=false", KL_WARNING);
+            // Verifikation: OverrideActive in der ZDM-Instanz prüfen
+            $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
+            if ($vid) {
+                $val = (bool) @GetValue($vid);
+                $this->LogMessage('ORCH: ZDM OverrideActive after StopCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
+            } else {
+                $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StopCalibration)', KL_WARNING);
+            }
         } else {
             $this->LogMessage('ORCH: ZDM_SetOverrideMode() not available', KL_ERROR);
         }
+    } else {
+        $this->LogMessage("ORCH: No ZDM instance linked – cannot set Override=false", KL_WARNING);
     }
 
-    // Adaptive zurück auf kooperativ + optional einmaliges "Lernen" auslösen
+    // 2) Adaptive: neutralen Schritt lernen lassen + Modus zurücksetzen
     if ($adaptiveID > 0) {
         if (function_exists('ACIPS_ForceActionAndLearn')) {
-            ACIPS_ForceActionAndLearn($adaptiveID);
-            $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn() requested', KL_MESSAGE);
+            // WICHTIG: 2. Argument ist Pflicht → neutraler Output "0:0"
+            $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn("0:0") requested', KL_MESSAGE);
+            ACIPS_ForceActionAndLearn($adaptiveID, '0:0');
         } else {
-            $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
+            $this->LogMessage('ORCH StopCalibration: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
         }
+
         if (function_exists('ACIPS_SetMode')) {
             ACIPS_SetMode($adaptiveID, 'cooperative');
             $this->LogMessage('ORCH: ACIPS_SetMode(cooperative) requested', KL_MESSAGE);
         } else {
-            $this->LogMessage('ORCH: ACIPS_SetMode() not available', KL_ERROR);
+            $this->LogMessage('ORCH StopCalibration: ACIPS_SetMode() not available', KL_ERROR);
         }
+    } else {
+        $this->LogMessage('ORCH: No Adaptive instance linked – skipping AC reset', KL_WARNING);
     }
 
-    // Originalziele wiederherstellen (falls vorhanden)
+    // 3) Original-Zieltemperaturen wiederherstellen (falls implementiert)
     if (method_exists($this, 'restoreOriginalTargets')) {
         $this->restoreOriginalTargets();
     }
 
-    // Status / UI
+    // 4) Status / UI
     $this->WriteAttributeString('CalibrationStatus', 'Done');
-    $this->SetStatus(102);
+    $this->SetStatus(102); // grün bleiben
     $this->LogMessage('ORCH: Calibration finished (status=Done).', KL_MESSAGE);
 
     if (method_exists($this, 'ReloadForm')) {
         $this->ReloadForm();
     }
 }
+
 
 
     public function RunNextStep()
