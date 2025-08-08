@@ -247,10 +247,20 @@ class HVAC_Learning_Orchestrator extends IPSModule
             $zoningID = $this->ReadPropertyInteger('ZoningManagerID');
             if (function_exists('ZDM_CommandFlaps')) {
                 try {
+                    $flapMap = [];
+                    foreach (($currentStage['setup']['flaps'] ?? []) as $f) {
+                        if (isset($f['name'])) {
+                            $flapMap[(string)$f['name']] = (bool)($f['open'] ?? false);
+                        }
+                    }
+                    
+                    // Optional: log what we’re about to send
+                    $this->LogMessage('ORCH flapMap → ' . json_encode($flapMap, JSON_UNESCAPED_UNICODE), KL_MESSAGE);
+                    
                     ZDM_CommandFlaps(
-                        $zoningID,
-                        (string)($currentStage['name'] ?? 'calibration'),
-                        json_encode($currentStage['setup']['flaps'])
+                        $this->ReadPropertyInteger('ZoningManagerID'),
+                        $currentStage['name'] ?? 'calibration',
+                        json_encode($flapMap, JSON_UNESCAPED_UNICODE)
                     );
                 } catch (\Throwable $e) {
                     $this->reportError('ZDM_CommandFlaps failed: ' . $e->getMessage());
