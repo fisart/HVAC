@@ -2,7 +2,7 @@
 /**
  * Adaptive HVAC Control 
  *
- * Version: 2.8.2 (Naming cleanup, dual coil limits, migrations, prefix fix)
+ * Version: 2.8.3 (GetActionPairs API + ZDM demand gate + mode mapping)
  * Author:  Artur Fischer & AI Consultant
  *
  * - Q-Learning mit Epsilon (Start/Min/Decay)
@@ -86,8 +86,9 @@ class adaptive_HVAC_control extends IPSModule
         // Timer → wrapper via module.json prefix (assumed "ACIPS")
         $this->RegisterTimer('LearningTimer', 0, 'ACIPS_ProcessLearning($_IPS[\'TARGET\']);');
         $this->RegisterAttributeBoolean('MigratedNaming', false);
-        $this->RegisterPropertyInteger('OperatingMode', 2); // 0=Cooling, 1=Heating, 2=Auto/Cooperative
 
+        // Operating mode for Orchestrator
+        $this->RegisterPropertyInteger('OperatingMode', 2); // 0=Cooling, 1=Heating, 2=Auto/Cooperative
     }
 
     public function ApplyChanges()
@@ -137,58 +138,70 @@ class adaptive_HVAC_control extends IPSModule
         $this->log(2, 'apply_changes', ['interval_ms' => $intervalMs]);
     }
 
-    // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
-   public function SetMode($mode): void
+    // -------------------- Public APIs for Orchestrator/UI --------------------
+
+    /**
+     * Accepts int or string and normalizes to 0..2
+     * 0=Cooling, 1=Heating, 2=Auto/Cooperative
+     */
+    public function SetMode($mode): void
     {
-        // Accept int or string; map strings to enum 0..2
-        // 0=Cooling, 1=Heating, 2=Auto
         $map = [
             '0' => 0, 'cool' => 0, 'cooling' => 0,
             '1' => 1, 'heat' => 1, 'heating' => 1,
             '2' => 2, 'auto' => 2,
-            // Orchestrator-friendly labels (no functional change here, map to Auto)
-            'cooperative' => 2,
-            'standalone'  => 2
+            'cooperative' => 2, 'standalone' => 2, 'orchestrated' => 2
         ];
-    
+
         if (is_string($mode)) {
             $key = mb_strtolower(trim($mode));
             if (array_key_exists($key, $map)) {
                 $mode = $map[$key];
             } else {
-                // Unknown label → default to Auto
                 $this->log(1, 'set_mode_unknown_label', ['label' => $mode]);
                 $mode = 2;
             }
         }
-    
         if (!is_int($mode)) {
             $this->log(1, 'set_mode_type_error', ['given' => gettype($mode)]);
-            $mode = 2; // fallback to Auto
+            $mode = 2;
         }
-    
-        // clamp to 0..2
         if ($mode < 0) $mode = 0;
         if ($mode > 2) $mode = 2;
-    
+
         IPS_SetProperty($this->InstanceID, 'OperatingMode', $mode);
         @IPS_ApplyChanges($this->InstanceID);
-    
+
         $this->log(2, 'set_mode', ['mode' => $mode]);
     }
 
-    
     public function GetMode(): int
     {
         return (int)$this->ReadPropertyInteger('OperatingMode');
     }
 
+    /**
+     * Expose all allowed "P:F" pairs for plan generation
+     * Global wrapper => ACIPS_GetActionPairs($id)
+     */
+    public function GetActionPairs(): string
+    {
+        $allowed = $this->getAllowedActionPairs(); // map "P:F" => true
+        return json_encode(array_keys($allowed));
+    }
+
+    /**
+     * Simple external command hook (optional for Orchestrator)
+     */
     public function CommandSystem(int $powerPercent, int $fanPercent): void
     {
         $powerPercent = max(0, min(100, $powerPercent));
         $fanPercent   = max(0, min(100, $fanPercent));
         $this->applyAction($powerPercent, $fanPercent);
     }
+
+    // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
+
     public function ProcessLearning(): void
     {
         if ($this->ReadPropertyBoolean('ManualOverride')) {
@@ -200,7 +213,7 @@ class adaptive_HVAC_control extends IPSModule
             return;
         }
 
-        // --- ZDM demand gate (NEW) ---
+        // --- ZDM demand gate ---
         if (!$this->hasZdmCoolingDemand()) {
             $this->applyAction(0, 0);                  // ensure outputs are off
             $this->log(2, 'zdm_no_demand_idle');       // do not learn on idle
@@ -231,7 +244,7 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ForceActionAndLearn(string $pair): string
     {
-        // --- ZDM demand gate for forced actions (NEW) ---
+        // --- ZDM demand gate for forced actions ---
         if (!$this->hasZdmCoolingDemand()) {
             $this->applyAction(0, 0);
             return json_encode(['ok'=>false,'err'=>'zdm_no_demand']);
@@ -480,7 +493,7 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
 
-    // -------- NEW: ZDM demand detection --------
+    // -------- ZDM demand detection --------
 
     private function hasZdmCoolingDemand(): bool
     {
@@ -496,8 +509,7 @@ class adaptive_HVAC_control extends IPSModule
             return true;
         }
 
-        // Accept multiple possible aggregate shapes
-        // 1) explicit boolean-like flag
+        // explicit flag if provided
         if (array_key_exists('coolingDemand', $agg)) {
             $cd = $agg['coolingDemand'];
             if (is_bool($cd)) return $cd;
@@ -505,7 +517,7 @@ class adaptive_HVAC_control extends IPSModule
             if (is_string($cd)) return in_array(mb_strtolower(trim($cd)), ['1','true','on','yes'], true);
         }
 
-        // 2) num active rooms OR total cooling demand values
+        // fallback: num active rooms or total demand
         $numActive = (int)($agg['numActiveRooms'] ?? 0);
         $totalCooling = (float)($agg['totalCoolingDemand'] ?? ($agg['totalDemand'] ?? 0.0));
 
