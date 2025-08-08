@@ -229,6 +229,31 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->guardLeave();
         }
     }
+    // ---- Global-call wrappers (make Orchestrator happy) ----
+    
+    // Called as: ZDM_CommandSystem($instanceID, $power, $fan)
+    public function CommandSystem(int $powerPercent, int $fanPercent): void
+    {
+        $this->ZDM_CommandSystem($powerPercent, $fanPercent);
+    }
+    
+    // Called as: ZDM_SetOverrideMode($instanceID, true/false)
+    public function SetOverrideMode(bool $on): void
+    {
+        $this->ZDM_SetOverrideMode($on);
+    }
+    
+    // Called as: ZDM_CommandFlaps($instanceID, "StageName", "{\"Living Room\":true,...}")
+    public function CommandFlaps(string $stageName, string $flapConfigJson): void
+    {
+        $this->ZDM_CommandFlaps($stageName, $flapConfigJson);
+    }
+    
+    // Called as: ZDM_GetAggregates($instanceID)
+    public function GetAggregates(): string
+    {
+        return $this->ZDM_GetAggregates();
+    }
 
     // ---------- Public (Aggregates) ----------
 
