@@ -2,7 +2,7 @@
 /**
  * Zoning_and_Demand_Manager
  *
- * Version: 1.3 (Debounce + Aggregates + Console Logging + Orchestrator APIs)
+ * Version: 1.3.1 (Startup guard + safe JSON decode)
  * Vendor:  Artur Fischer & AI Consultant
  *
  * Kurzbeschreibung:
@@ -62,6 +62,12 @@ class Zoning_and_Demand_Manager extends IPSModule
     {
         parent::ApplyChanges();
 
+        // ---> FIX: prevent early timer execution before kernel is ready
+        if (IPS_GetKernelRunlevel() !== KR_READY) {
+            $this->SetTimerInterval('ZDM_Timer', 0);
+            return;
+        }
+
         // Konfiguration prüfen (Minimal-Check)
         $ok = true;
         // (Optional mehr Checks hinzufügen, z.B. ob ControlledRooms nicht leer)
@@ -76,13 +82,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         ]);
     }
 
-    // Public API for Orchestrator (global: ZDM_GetRoomConfigurations)
-    public function GetRoomConfigurations(): string
-    {
-        // return a FLAT array of rooms (what Orchestrator expects)
-        $rooms = $this->getRooms();
-        return json_encode(is_array($rooms) ? $rooms : []);
-    }
+    // ---------- Public (Timer) ----------
 
     public function ZDM_ProcessZoning()
     {
@@ -91,6 +91,12 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function ProcessZoning(): void
     {
+        // ---> FIX: extra runtime guard
+        if (IPS_GetKernelRunlevel() !== KR_READY) {
+            $this->log(1, 'kernel_not_ready_skip');
+            return;
+        }
+
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
             // Override aktiv? Dann keine Autologik
@@ -235,31 +241,6 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->guardLeave();
         }
     }
-    // ---- Global-call wrappers (make Orchestrator happy) ----
-    
-    // Called as: ZDM_CommandSystem($instanceID, $power, $fan)
-    public function CommandSystem(int $powerPercent, int $fanPercent): void
-    {
-        $this->ZDM_CommandSystem($powerPercent, $fanPercent);
-    }
-    
-    // Called as: ZDM_SetOverrideMode($instanceID, true/false)
-    public function SetOverrideMode(bool $on): void
-    {
-        $this->ZDM_SetOverrideMode($on);
-    }
-    
-    // Called as: ZDM_CommandFlaps($instanceID, "StageName", "{\"Living Room\":true,...}")
-    public function CommandFlaps(string $stageName, string $flapConfigJson): void
-    {
-        $this->ZDM_CommandFlaps($stageName, $flapConfigJson);
-    }
-    
-    // Called as: ZDM_GetAggregates($instanceID)
-    public function GetAggregates(): string
-    {
-        return $this->ZDM_GetAggregates();
-    }
 
     // ---------- Public (Aggregates) ----------
 
@@ -274,50 +255,36 @@ class Zoning_and_Demand_Manager extends IPSModule
         $maxDeltaT = 0.0;
         $anyWindow = false;
         $activeRooms = [];
-    
+
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
-    
-        // NEW: accumulate a simple numeric "cooling demand" (sum of positive deltas beyond hysteresis)
-        $totalCoolingDemand = 0.0;
-    
+
         foreach ($rooms as $r) {
             $ist  = $this->GetFloat((int)($r['tempID'] ?? 0));
             $soll = $this->GetFloat((int)($r['targetID'] ?? 0));
             $win  = $this->isWindowOpenStable($r);
-    
+
             if (is_finite($ist) && is_finite($soll)) {
                 $delta = $ist - $soll; // >0 = Kühlbedarf
                 if (!$win && ($delta > $hyst)) {
                     $numActive++;
                     $activeRooms[] = (string)($r['name'] ?? 'room');
                     $maxDeltaT = max($maxDeltaT, abs($delta));
-    
-                    // accumulate demand beyond hysteresis (e.g., 27-24=3, hyst=0.5 → 2.5)
-                    $totalCoolingDemand += max(0.0, $delta - $hyst);
                 }
             }
             $anyWindow = $anyWindow || $win;
         }
-    
-        // NEW: explicit boolean that Adaptive can rely on
-        $coolingDemand = ($numActive > 0) || ($totalCoolingDemand > 0.0);
-    
+
         $agg = [
-            'numActiveRooms'     => $numActive,
-            'maxDeltaT'          => round($maxDeltaT, 2),
-            'anyWindowOpen'      => $anyWindow,
-            'activeRooms'        => $activeRooms,
-            // --- NEW fields used by Adaptive ---
-            'coolingDemand'      => $coolingDemand,                 // boolean
-            'totalCoolingDemand' => round($totalCoolingDemand, 3)   // numeric indicator
+            'numActiveRooms' => $numActive,
+            'maxDeltaT'      => round($maxDeltaT, 2),
+            'anyWindowOpen'  => $anyWindow,
+            'activeRooms'    => $activeRooms
         ];
-    
         $this->WriteAttributeString('LastAggregates', json_encode($agg));
         $this->log(3, 'agg', $agg);
-    
+
         return json_encode($agg);
     }
-
 
     // ---------- Intern: Flaps/System ----------
 
@@ -421,33 +388,37 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     // ---------- Intern: Fenster/Door (Debounce) ----------
 
+    // ---> FIXED: tolerant & safe against early startup and bad JSON
     private function isWindowOpenStable(array $room): bool
     {
         $debounce = max(0, (int)$this->ReadPropertyInteger('WindowDebounceSec'));
         $name = (string)($room['name'] ?? 'room');
-        $map = $this->getWindowStableMap();
 
+        $map = $this->getWindowStableMap();   // robust: [] on error
         $raw = $this->isWindowOpenRaw($room);
         $now = time();
 
-        $st = $map[$name] ?? ['open' => $raw, 'ts' => $now];
-        if ($raw !== $st['open']) {
-            if (($now - $st['ts']) >= $debounce) {
-                $st = ['open' => $raw, 'ts' => $now];
+        // current stable state for this room (default to current raw)
+        $st = $map[$name] ?? ['open' => (bool)$raw, 'ts' => $now];
+
+        if ((bool)$raw !== (bool)$st['open']) {
+            // state changed → commit only after debounce time
+            if (($now - (int)$st['ts']) >= $debounce) {
+                $st = ['open' => (bool)$raw, 'ts' => $now];
                 $map[$name] = $st;
                 $this->setWindowStableMap($map);
                 $this->log(2, 'window_state_committed', ['room'=>$name, 'open'=>$st['open']]);
-            } else {
-                // innerhalb Debounce → alten stabilen Zustand halten
             }
+            // else: keep old stable state until debounce expires
         } else {
-            // Refresh gelegentlich
-            if (($now - $st['ts']) > 3600) {
+            // same state → refresh timestamp occasionally
+            if (($now - (int)$st['ts']) > 3600) {
                 $st['ts'] = $now;
                 $map[$name] = $st;
                 $this->setWindowStableMap($map);
             }
         }
+
         return (bool)$st['open'];
     }
 
@@ -481,14 +452,31 @@ class Zoning_and_Demand_Manager extends IPSModule
         return false;
     }
 
+    // ---> FIXED: safe attribute read + json decode
     private function getWindowStableMap(): array
     {
-        return json_decode($this->ReadAttributeString('WindowStable'), true) ?: [];
+        $raw = @$this->ReadAttributeString('WindowStable');
+
+        if (!is_string($raw) || $raw === '') {
+            return [];
+        }
+
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            $this->log(1, 'windowstable_json_invalid', ['raw' => $raw]);
+            return [];
+        }
+        return $data;
     }
 
     private function setWindowStableMap(array $m): void
     {
-        $this->WriteAttributeString('WindowStable', json_encode($m));
+        $json = json_encode($m, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            $this->log(1, 'windowstable_json_encode_failed');
+            return;
+        }
+        $this->WriteAttributeString('WindowStable', $json);
     }
 
     // ---------- Intern: Hilfen ----------
