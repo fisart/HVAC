@@ -89,52 +89,51 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     public function ApplyChanges()
-{
-    parent::ApplyChanges();
+    {
+        parent::ApplyChanges();
 
-    // ---- one-time migration (no recursion) ----
-    $migrated = (bool)$this->ReadAttributeBoolean('MigratedNaming');
-    if (!$migrated) {
-        $changed = false;
+        // ---- one-time migration (no recursion) ----
+        $migrated = (bool)$this->ReadAttributeBoolean('MigratedNaming');
+        if (!$migrated) {
+            $changed = false;
 
-        // MinCoilTemp -> MinCoilTempLearning (only if user had a non-default old value)
-        $minLearn = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
-        $minOld   = (float)$this->ReadPropertyFloat('MinCoilTemp');
-        if (abs($minLearn - 2.0) < 0.0001 && abs($minOld - 2.0) > 0.0001) {
-            IPS_SetProperty($this->InstanceID, 'MinCoilTempLearning', $minOld);
-            $changed = true;
+            // MinCoilTemp -> MinCoilTempLearning (only if user had a non-default old value)
+            $minLearn = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
+            $minOld   = (float)$this->ReadPropertyFloat('MinCoilTemp');
+            if (abs($minLearn - 2.0) < 0.0001 && abs($minOld - 2.0) > 0.0001) {
+                IPS_SetProperty($this->InstanceID, 'MinCoilTempLearning', $minOld);
+                $changed = true;
+            }
+
+            // MinCoilTempLink -> EmergencyCoilTempLink (only if new is empty, old set)
+            $emergLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
+            $oldLink   = (int)$this->ReadPropertyInteger('MinCoilTempLink');
+            if ($emergLink === 0 && $oldLink > 0) {
+                IPS_SetProperty($this->InstanceID, 'EmergencyCoilTempLink', $oldLink);
+                $changed = true;
+            }
+
+            if ($changed) {
+                $this->WriteAttributeBoolean('MigratedNaming', true);
+                @IPS_ApplyChanges($this->InstanceID); // re-enter ONCE with migrated props
+                return; // avoid continuing in the pre-migration context
+            } else {
+                // no migration needed; mark as done to avoid checking again
+                $this->WriteAttributeBoolean('MigratedNaming', true);
+            }
         }
 
-        // MinCoilTempLink -> EmergencyCoilTempLink (only if new is empty, old set)
-        $emergLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
-        $oldLink   = (int)$this->ReadPropertyInteger('MinCoilTempLink');
-        if ($emergLink === 0 && $oldLink > 0) {
-            IPS_SetProperty($this->InstanceID, 'EmergencyCoilTempLink', $oldLink);
-            $changed = true;
+        // ---- normal ApplyChanges flow ----
+        $this->SetStatus(102);
+        $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
+        $this->SetTimerInterval('LearningTimer', $intervalMs);
+
+        if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
+            $this->initExploration();
         }
 
-        if ($changed) {
-            $this->WriteAttributeBoolean('MigratedNaming', true);
-            @IPS_ApplyChanges($this->InstanceID); // re-enter ONCE with migrated props
-            return; // avoid continuing in the pre-migration context
-        } else {
-            // no migration needed; mark as done to avoid checking again
-            $this->WriteAttributeBoolean('MigratedNaming', true);
-        }
+        $this->log(2, 'apply_changes', ['interval_ms' => $intervalMs]);
     }
-
-    // ---- normal ApplyChanges flow ----
-    $this->SetStatus(102);
-    $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
-    $this->SetTimerInterval('LearningTimer', $intervalMs);
-
-    if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
-        $this->initExploration();
-    }
-
-    $this->log(2, 'apply_changes', ['interval_ms' => $intervalMs]);
-}
-
 
     // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
 
@@ -146,6 +145,13 @@ class adaptive_HVAC_control extends IPSModule
         }
         if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
             $this->log(3, 'ac_inactive_skip');
+            return;
+        }
+
+        // --- ZDM demand gate (NEW) ---
+        if (!$this->hasZdmCoolingDemand()) {
+            $this->applyAction(0, 0);                  // ensure outputs are off
+            $this->log(2, 'zdm_no_demand_idle');       // do not learn on idle
             return;
         }
 
@@ -173,6 +179,12 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ForceActionAndLearn(string $pair): string
     {
+        // --- ZDM demand gate for forced actions (NEW) ---
+        if (!$this->hasZdmCoolingDemand()) {
+            $this->applyAction(0, 0);
+            return json_encode(['ok'=>false,'err'=>'zdm_no_demand']);
+        }
+
         if (!$this->coilProtectionOk()) {
             $this->applyAction(0, 0);
             return json_encode(['ok'=>false,'err'=>'coil_protection']);
@@ -416,6 +428,37 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
 
+    // -------- NEW: ZDM demand detection --------
+
+    private function hasZdmCoolingDemand(): bool
+    {
+        $iid = (int)$this->ReadPropertyInteger('ZDM_InstanceID');
+        if ($iid <= 0 || !IPS_InstanceExists($iid)) {
+            // No ZDM linked → do not block
+            return true;
+        }
+
+        $agg = $this->fetchZDMAggregates();
+        if (!is_array($agg)) {
+            // If we can't read aggregates, don't block
+            return true;
+        }
+
+        // Accept multiple possible aggregate shapes
+        // 1) explicit boolean-like flag
+        if (array_key_exists('coolingDemand', $agg)) {
+            $cd = $agg['coolingDemand'];
+            if (is_bool($cd)) return $cd;
+            if (is_numeric($cd)) return ((float)$cd) > 0.0;
+            if (is_string($cd)) return in_array(mb_strtolower(trim($cd)), ['1','true','on','yes'], true);
+        }
+
+        // 2) num active rooms OR total cooling demand values
+        $numActive = (int)($agg['numActiveRooms'] ?? 0);
+        $totalCooling = (float)($agg['totalCoolingDemand'] ?? ($agg['totalDemand'] ?? 0.0));
+
+        return ($numActive > 0) || ($totalCooling > 0.0);
+    }
 
     // -------------------- Q-Table Persistenz --------------------
 
@@ -615,7 +658,7 @@ class adaptive_HVAC_control extends IPSModule
 
     // -------------------- Logging --------------------
 
-    private function log(int $lvl, string $event, array $data = []): void
+    private function log(int $lvl, string $event, array $data = [])
     {
         $cfg = (int)$this->ReadPropertyInteger('LogLevel');
         if ($lvl > $cfg) return;
