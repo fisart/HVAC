@@ -84,10 +84,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     // ---------- Public (Timer) ----------
 
-    public function ProcessZoning()
-    {
-        $this->ProcessZoning();
-    }
+
 
     public function ProcessZoning(): void
     {
