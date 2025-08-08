@@ -1,398 +1,606 @@
 <?php
 /**
- * @file          module.php
- * @author        Artur Fischer & AI Consultant
- * @version       3.4 (Definitive Fix for list() assignment)
- * @date          2025-08-07
+ * Adaptive HVAC Control
+ *
+ * Version: 2.8 (Epsilon-Schedule, Coil-Watchdog, ZDM Aggregates, Atomic Q-Persist, Console Logging)
+ * Author:  Artur Fischer & AI Consultant
+ *
+ * Kurz:
+ *  - Q-Learning-basierte Stellgrößenwahl (Power/Fan)
+ *  - Epsilon-Exploration mit Start/Min/Decay
+ *  - Coil-Schutz (MinTemp/DropRate) → Aktion 0:0 bei Gefahr
+ *  - ZDM-Aggregate optional als State-Features
+ *  - Q-Table atomar in Datei (optional) oder Attribut
+ *  - Alle Logs im Symcon-Meldungsfenster (IPS_LogMessage via $this->LogMessage)
  */
+
+declare(strict_types=1);
 
 class adaptive_HVAC_control extends IPSModule
 {
-    private const OPTIMISTIC_INIT = 1.0;
+    // -------------------- Lifecycle --------------------
 
-    // --- IPS Core Functions ---
     public function Create()
     {
         parent::Create();
+
+        // Bestehende Properties (aus deiner Form)
         $this->RegisterPropertyBoolean('ManualOverride', false);
-        $this->RegisterPropertyInteger('LogLevel', 3);
-        $this->RegisterPropertyFloat('Alpha', 0.1);
-        $this->RegisterPropertyFloat('Gamma', 0.9);
-        $this->RegisterPropertyFloat('DecayRate', 0.001);
+        $this->RegisterPropertyInteger('LogLevel', 3);                 // 0=ERROR,1=WARN,2=INFO,3=DEBUG
+
+        $this->RegisterPropertyFloat('Alpha', 0.05);
+        $this->RegisterPropertyFloat('Gamma', 0.90);
+        $this->RegisterPropertyFloat('DecayRate', 0.005);
+
         $this->RegisterPropertyFloat('Hysteresis', 0.5);
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
+
         $this->RegisterPropertyInteger('ACActiveLink', 0);
         $this->RegisterPropertyInteger('PowerOutputLink', 0);
         $this->RegisterPropertyInteger('FanOutputLink', 0);
-        $this->RegisterPropertyInteger('CoilTempLink', 0);
-        $this->RegisterPropertyInteger('MinCoilTempLink', 0);
-        $this->RegisterPropertyString('MonitoredRooms', '[]');
-        $this->RegisterPropertyInteger('TimerInterval', 120);
+
+        $this->RegisterPropertyInteger('TimerInterval', 60);
+
+        // Actions/Granularität
+        $this->RegisterPropertyString('CustomPowerLevels', '0,40,80,100');
         $this->RegisterPropertyInteger('PowerStep', 20);
-        $this->RegisterPropertyString('CustomPowerLevels', '30,55,75,100');
+        $this->RegisterPropertyString('CustomFanSpeeds', '0,40,80,100');
         $this->RegisterPropertyInteger('FanStep', 20);
-        $this->RegisterPropertyString('CustomFanSpeeds', '');
-        $this->RegisterPropertyString('OperatingMode', 'cooperative');
-        $this->RegisterAttributeString('LastOperatingMode', 'cooperative');
-        $this->RegisterAttributeString('QTable', json_encode([]));
-        $this->RegisterAttributeFloat('Epsilon', 0.4);
-        $this->RegisterVariableFloat("CurrentEpsilon", "Current Epsilon", "", 1);
-        $this->RegisterVariableString("QTableJSON", "Q-Table (JSON)", "~TextBox", 2);
-        $this->RegisterVariableString("QTableHTML", "Q-Table Visualization", "~HTMLBox", 3);
-        $this->RegisterTimer('ProcessCoolingLogic', 0, 'ACIPS_ProcessCoolingLogic($_IPS[\'TARGET\']);');
+
+        // Sensoren
+        $this->RegisterPropertyInteger('CoilTempLink', 0);
+
+        // Monitored Rooms (aus deiner Form)
+        $this->RegisterPropertyString('MonitoredRooms', '[]');
+
+        // -------------------- NEU (Änderung 1) --------------------
+
+        // Exploration / Epsilon
+        $this->RegisterPropertyFloat('EpsilonStart', 0.40);
+        $this->RegisterPropertyFloat('EpsilonMin',   0.05);
+        $this->RegisterPropertyFloat('EpsilonDecay', 0.995);
+
+        // Coil / Safety
+        $this->RegisterPropertyFloat('MinCoilTemp', 2.0);          // °C
+        $this->RegisterPropertyFloat('MaxCoilDropRate', 1.5);      // K/min
+        $this->RegisterPropertyBoolean('AbortOnCoilFreeze', true);
+
+        // ZDM-Integration
+        $this->RegisterPropertyInteger('ZDM_InstanceID', 0);
+
+        // Q-Table Persistenz (optional Datei)
+        $this->RegisterPropertyString('QTablePath', '');
+
+        // Attribute
+        $this->RegisterAttributeFloat('Epsilon', 0.0);
+        $this->RegisterAttributeString('QTable', '{}');            // Fallback, wenn kein Dateipfad
+        $this->RegisterAttributeString('LastAction', '0:0');
+
+        // Timer
+        $this->RegisterTimer('LearningTimer', 0, 'ADHVAC_ProcessLearning($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
     {
         parent::ApplyChanges();
-        if (IPS_GetKernelRunlevel() !== KR_READY) return;
-        
-        $currentMode = $this->ReadPropertyString('OperatingMode');
-        if ($this->ReadAttributeString('LastOperatingMode') !== $currentMode) {
-            $this->Log('Operating Mode has changed. It is STRONGLY recommended to reset learning.', KL_WARNING);
-            $this->WriteAttributeString('LastOperatingMode', $currentMode);
+
+        $ok = true;
+        $this->SetStatus($ok ? 102 : 202);
+
+        // Timer aktivieren (kein orchestrated-Stop hier, damit rückwärtskompatibel)
+        $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
+        $this->SetTimerInterval('LearningTimer', $intervalMs);
+
+        // Initial Epsilon, falls 0
+        if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
+            $this->initExploration(); // Änderung 3
         }
-        
-        $this->SetTimerInterval('ProcessCoolingLogic', ($currentMode === 'orchestrated') ? 0 : $this->ReadPropertyInteger('TimerInterval') * 1000);
-        $this->UpdateVisualization();
-        $this->SetStatus(($this->ReadPropertyInteger('PowerOutputLink') === 0 || $this->ReadPropertyInteger('ACActiveLink') === 0) ? 104 : 102);
+
+        $this->log(2, 'apply_changes', ['interval_ms'=>$intervalMs]);
     }
 
-    public function GetConfigurationForm()
+    // -------------------- Public Timer-Entry --------------------
+
+    public function ADHVAC_ProcessLearning()
     {
-        $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
-        $customPowerLevels = $this->ReadPropertyString('CustomPowerLevels');
-        $customFanSpeeds = $this->ReadPropertyString('CustomFanSpeeds');
-        
-        foreach ($form['elements'] as &$element) {
-            if (isset($element['name']) && $element['name'] == 'PowerStep') $element['visible'] = empty($customPowerLevels);
-            if ($element['type'] === 'ExpansionPanel') {
-                foreach ($element['items'] as &$item) {
-                    if (isset($item['name']) && $item['name'] == 'FanStep') $item['visible'] = empty($customFanSpeeds);
+        $this->ProcessLearning();
+    }
+
+    public function ProcessLearning(): void
+    {
+        // Abbruch, wenn manuell
+        if ($this->ReadPropertyBoolean('ManualOverride')) {
+            $this->log(2, 'manual_override_active');
+            return;
+        }
+        // AC aktiv?
+        if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
+            $this->log(3, 'ac_inactive_skip');
+            return;
+        }
+
+        // Coil-Schutz (Änderung 2)
+        if (!$this->coilProtectionOk()) {
+            $this->applyAction(0, 0);
+            return;
+        }
+
+        // STATE aufbauen
+        $state = $this->buildStateVector(); // inkl. optionaler ZDM-Aggregate (Änderung 4)
+
+        // Aktion wählen (epsilon-greedy)
+        [$p, $f] = $this->selectActionEpsilonGreedy($state);
+
+        // Delta-Limits beachten
+        [$p, $f] = $this->limitDeltas($p, $f);
+
+        // Anwenden
+        $this->applyAction($p, $f);
+
+        // Reward berechnen
+        $reward = $this->calculateReward($state, ['p'=>$p, 'f'=>$f]);
+
+        // Q-Update
+        $this->qlearnUpdate($state, $p, $f, $reward, /*explore=*/true);
+
+        // Epsilon annealen (Änderung 3)
+        $this->annealEpsilon();
+
+        // Persistenz (Änderung 5)
+        $this->persistQTableIfNeeded();
+    }
+
+    // -------------------- Orchestrator-API (Forcing) --------------------
+
+    /**
+     * Forciert eine Aktion "P:F" (z. B. "55:70") und lernt aus dem Outcome.
+     * Exploration ist in diesem Pfad **aus**.
+     */
+    public function ACIPS_ForceActionAndLearn(string $pair): string
+    {
+        // Coil-Schutz
+        if (!$this->coilProtectionOk())) {
+            $this->applyAction(0, 0);
+            return json_encode(['ok'=>false,'err'=>'coil_protection']);
+        }
+
+        $act = $this->validateActionPair($pair);
+        if (!$act) {
+            $this->log(1, 'force_invalid_pair', ['pair'=>$pair]);
+            return json_encode(['ok'=>false,'err'=>'invalid_pair']);
+        }
+        [$p, $f] = $act;
+        [$p, $f] = $this->limitDeltas($p, $f);
+
+        $this->applyAction($p, $f);
+
+        $state  = $this->buildStateVector();
+        $reward = $this->calculateReward($state, ['p'=>$p, 'f'=>$f]);
+
+        // Q-Update ohne Exploration
+        $this->qlearnUpdate($state, $p, $f, $reward, /*explore=*/false);
+        $this->WriteAttributeString('LastAction', $p.':'.$f);
+        $this->persistQTableIfNeeded();
+
+        return json_encode(['ok'=>true, 'applied'=>['p'=>$p,'f'=>$f], 'reward'=>$reward]);
+    }
+
+    // -------------------- Learning Core --------------------
+
+    private function selectActionEpsilonGreedy(array $state): array
+    {
+        $pairs = $this->getAllowedActionPairs();
+        if (empty($pairs)) return [0, 0];
+
+        $eps = (float)$this->ReadAttributeFloat('Epsilon');
+        if (mt_rand() / mt_getrandmax() < $eps) {
+            // Explore: zufällige erlaubte Aktion
+            $key = array_rand($pairs);
+            [$p, $f] = array_map('intval', explode(':', $key));
+            $this->log(3, 'select_explore', ['pair'=>$key,'epsilon'=>$eps]);
+            return [$p, $f];
+        }
+
+        // Exploit: bestes Q
+        $bestKey = $this->bestActionForState($state, array_keys($pairs));
+        [$p, $f] = array_map('intval', explode(':', $bestKey));
+        $this->log(3, 'select_exploit', ['pair'=>$bestKey,'epsilon'=>$eps]);
+        return [$p, $f];
+    }
+
+    private function qlearnUpdate(array $state, int $p, int $f, float $reward, bool $explore): void
+    {
+        $alpha = (float)$this->ReadPropertyFloat('Alpha');
+        $gamma = (float)$this->ReadPropertyFloat('Gamma');
+
+        $q = $this->loadQTable();
+
+        $sKey = $this->stateKey($state);
+        $aKey = $p.':'.$f;
+
+        if (!isset($q[$sKey])) $q[$sKey] = [];
+        if (!isset($q[$sKey][$aKey])) $q[$sKey][$aKey] = 0.0;
+
+        // Nächster State (vereinfachend: gleich dem aktuellen; falls du nextState hast, hier einsetzen)
+        $maxNext = 0.0;
+        foreach ($q[$sKey] as $ak => $val) {
+            if ($val > $maxNext) $maxNext = $val;
+        }
+
+        $old = $q[$sKey][$aKey];
+        $new = (1 - $alpha) * $old + $alpha * ($reward + $gamma * $maxNext);
+        $q[$sKey][$aKey] = $new;
+
+        $this->storeQTable($q);
+        $this->WriteAttributeString('LastAction', $aKey);
+        $this->log(3, 'q_update', ['state'=>$sKey, 'a'=>$aKey, 'old'=>$old, 'new'=>$new, 'r'=>$reward, 'explore'=>$explore]);
+    }
+
+    private function buildStateVector(): array
+    {
+        $rooms = $this->getRooms();
+        $hyst  = (float)$this->ReadPropertyFloat('Hysteresis');
+
+        $numActive = 0;
+        $maxDelta  = 0.0;
+        $anyWindow = false;
+
+        foreach ($rooms as $r) {
+            $ist  = $this->getFloat((int)($r['tempID'] ?? 0));
+            $soll = $this->getFloat((int)($r['targetID'] ?? 0));
+            $win  = $this->roomWindowOpen($r);
+
+            if (is_finite($ist) && is_finite($soll)) {
+                $delta = $ist - $soll;
+                if (!$win && $delta > $hyst) {
+                    $numActive++;
+                    $maxDelta = max($maxDelta, $delta);
                 }
             }
+            $anyWindow = $anyWindow || $win;
         }
-        return json_encode($form);
-    }
-    
-    // --- Public API Functions ---
 
-    public function ProcessCoolingLogic()
-    {
-        if ($this->ReadPropertyString('OperatingMode') === 'orchestrated' || $this->ReadPropertyBoolean('ManualOverride')) return;
-        $this->ExecuteLearningCycle(null);
-    }
-
-    public function ResetLearning()
-    {
-        $this->WriteAttributeString('QTable', json_encode([]));
-        $this->SetBuffer('MetaData', json_encode([]));
-        $this->WriteAttributeFloat('Epsilon', 0.4);
-        $this->UpdateVisualization();
-        $this->Log('Learning has been reset by the user.', KL_MESSAGE);
-    }
-    
-    public function UpdateVisualization()
-    {
-        $this->SetValue("CurrentEpsilon", $this->ReadAttributeFloat('Epsilon'));
-        $this->SetValue("QTableJSON", $this->ReadAttributeString('QTable'));
-        $this->SetValue("QTableHTML", $this->GenerateQTableHTML());
-    }
-
-    public function GetActionPairs(): string
-    {
-        return json_encode($this->_getActionPairs());
-    }
-
-    public function SetMode(string $mode)
-    {
-        IPS_SetProperty($this->InstanceID, 'OperatingMode', $mode);
-        if (IPS_HasChanges($this->InstanceID)) IPS_ApplyChanges($this->InstanceID);
-    }
-
-    public function ForceActionAndLearn(string $forcedAction): string
-    {
-        if ($this->ReadPropertyString('OperatingMode') !== 'orchestrated') {
-            return json_encode(['error' => 'Not in Orchestrated mode']);
+        // ZDM Aggregates (Änderung 4)
+        $agg = $this->fetchZDMAggregates();
+        if ($agg) {
+            $numActive = max($numActive, (int)($agg['numActiveRooms'] ?? 0));
+            $maxDelta  = max($maxDelta, (float)($agg['maxDeltaT'] ?? 0.0));
+            $anyWindow = $anyWindow || !empty($agg['anyWindowOpen']);
         }
-        return json_encode($this->ExecuteLearningCycle($forcedAction));
-    }
 
-    // --- Core Q-Learning Engine ---
+        // Coil Temp (falls vorhanden)
+        $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
 
-    private function ExecuteLearningCycle(?string $forcedAction): array
-    {
-        // 1. Check Preconditions
-        $acActiveID = $this->ReadPropertyInteger('ACActiveLink');
-        if ($acActiveID === 0 || !IPS_VariableExists($acActiveID) || !GetValue($acActiveID)) {
-            return $this->ShutdownSystem(['state' => 'inactive', 'reward' => 0]);
-        }
-        
-        // 2. Assess Cooling Need
-        $monitoredRooms = json_decode($this->ReadPropertyString('MonitoredRooms'), true);
-        if (!$this->IsCoolingNeeded($monitoredRooms) && $forcedAction === null) {
-            return $this->ShutdownSystem(['state' => 'idle', 'reward' => 0]);
-        }
-        
-        // 3. Get State
-        $Q = json_decode($this->ReadAttributeString('QTable'), true);
-        $meta = json_decode($this->GetBuffer('MetaData'), true) ?: [];
-        $currentState = $this->getCurrentState($monitoredRooms, $meta);
-
-        // 4. Calculate Reward & Update Q-Table
-        $reward = 0;
-        if (isset($meta['state']) && isset($meta['action'])) {
-            $reward = $this->calculateReward($currentState, $meta);
-            $this->updateQ($Q, $currentState['string'], $meta['state'], $meta['action'], $reward, $meta['ts'] ?? time());
-        }
-        
-        // 5. Choose and Execute Action
-        $action = $forcedAction ?? $this->chooseAction($Q, $meta['action'] ?? '0:0', $currentState['string']);
-        list($P, $F) = array_map('intval', explode(':', $action));
-        RequestAction($this->ReadPropertyInteger('PowerOutputLink'), $P);
-        RequestAction($this->ReadPropertyInteger('FanOutputLink'), $F);
-        
-        // 6. Persist State
-        $this->WriteAttributeString('QTable', json_encode($Q));
-        $this->SetBuffer('MetaData', json_encode(['state' => $currentState['string'], 'action' => $action, 'ts' => time(), 'rawWAD' => $currentState['rawWAD'], 'coilTemp' => $currentState['coilTemp']]));
-        if ($action !== '0:0' && $forcedAction === null) $this->decayEpsilon();
-        
-        $this->Log("State: {$currentState['string']} -> Action: $action (Reward: ".number_format($reward, 2).")", KL_MESSAGE);
-        $this->UpdateVisualization(); // Update visualization at the end of the cycle
-        return ['state' => $currentState['string'], 'reward' => $reward];
-    }
-    
-    // --- Helper Functions for Q-Learning ---
-
-    // =================================================================================
-    // THIS FUNCTION CONTAINED THE BUG AND HAS BEEN CORRECTED
-    // =================================================================================
-    private function getCurrentState(array $rooms, array $meta): array
-    {
-        $coilTemp = GetValue($this->ReadPropertyInteger('CoilTempLink'));
-        $minCoil = GetValue($this->ReadPropertyInteger('MinCoilTempLink'));
-
-        // Correctly unpack the 4 values returned by the helper function
-        list($dBin, $oBin, $hotRoomCountBin, $rawWAD, $D_cold) = $this->discretizeRoomState($rooms);
-
-        // Calculate the coil-related state component here
-        $cBin = min(5, max(-2, (int)floor($coilTemp - $minCoil)));
-        
-        // Get the coil trend
-        $coilTrendBin = $this->getCoilTrendBin($coilTemp, $meta['coilTemp'] ?? $coilTemp);
-        
-        // Assemble the final state string with all 5 correct components
-        $stateString = ($this->ReadPropertyString('OperatingMode') === 'standalone')
-            ? "$dBin|$cBin|$oBin|$coilTrendBin|$hotRoomCountBin"
-            : "$dBin|$cBin|$coilTrendBin|$hotRoomCountBin";
-            
         return [
-            'string'   => $stateString,
-            'rawWAD'   => $rawWAD,
-            'D_cold'   => $D_cold,
-            'coilTemp' => $coilTemp,
-            'minCoil'  => $minCoil
+            'numActiveRooms' => $numActive,
+            'maxDelta'       => round($maxDelta, 2),
+            'anyWindowOpen'  => (int)$anyWindow,
+            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null
         ];
     }
-    
-    private function calculateReward(array $currentState, array $meta): float
-    {
-        list($prevP, $prevF) = array_map('intval', explode(':', $meta['action']));
-        
-        $r_progress = ($meta['rawWAD'] ?? 0) - $currentState['rawWAD'];
-        $r_freeze = -max(0, $currentState['minCoil'] - $currentState['coilTemp']) * 2;
-        $r_energy = $this->calculateEnergyReward($prevP, $prevF);
-        $r_overcool = ($this->ReadPropertyString('OperatingMode') === 'standalone') ? (-$currentState['D_cold'] * 5) : 0;
 
-        return ($r_progress * 10) + $r_freeze + $r_energy + $r_overcool;
-    }
-    
-    private function updateQ(array &$Q, string $sNew, string $sOld, string $aOld, float $r, int $prevTs)
+    private function calculateReward(array $state, array $action): float
     {
-        $actions = $this->_getActionPairs();
-        if (!isset($Q[$sOld])) $Q[$sOld] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
-        if (!isset($Q[$sNew])) $Q[$sNew] = array_fill_keys($actions, self::OPTIMISTIC_INIT);
-        
-        $oldQ = $Q[$sOld][$aOld] ?? self::OPTIMISTIC_INIT;
-        $maxFutureQ = empty($Q[$sNew]) ? 0.0 : max($Q[$sNew]);
-        $dt = max(1, (time() - $prevTs) / 60);
-        
-        $Q[$sOld][$aOld] = $oldQ + $this->ReadPropertyFloat('Alpha') * (($r * $dt) + $this->ReadPropertyFloat('Gamma') * $maxFutureQ - $oldQ);
-    }
-    
-    private function chooseAction(array &$Q, string $lastAction, string $state): string
-    {
-        $availableActions = $this->getAvailableActions($lastAction);
-        if ((mt_rand() / mt_getrandmax()) < $this->ReadAttributeFloat('Epsilon')) {
-            return $availableActions[array_rand($availableActions)];
+        // Beispielhaft:
+        // - Nähe an 0 (maxDelta -> 0) positiv
+        // - Hohe Leistung/Lüfter leicht negativ (Energie)
+        // - Fenster offen negativ
+        $comfort = -($state['maxDelta'] ?? 0.0);               // je kleiner desto besser
+        $energy  = -0.01 * (($action['p'] ?? 0) + ($action['f'] ?? 0));
+        $window  = -0.5 * (int)($state['anyWindowOpen'] ?? 0);
+
+        // Anti-Flapping
+        $penalty = 0.0;
+        if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
+            $dp = abs(((int)$m[1]) - ($action['p'] ?? 0));
+            $df = abs(((int)$m[2]) - ($action['f'] ?? 0));
+            $penalty = -0.002 * ($dp + $df);
         }
-        
-        if (!isset($Q[$state])) $Q[$state] = array_fill_keys($this->_getActionPairs(), self::OPTIMISTIC_INIT);
-        
-        $qValues = array_intersect_key($Q[$state], array_flip($availableActions));
-        if (empty($qValues)) return $lastAction;
-        
-        $maxVal = max($qValues);
-        $bestActions = array_keys($qValues, $maxVal);
-        return $bestActions[array_rand($bestActions)];
+
+        $reward = $comfort + $energy + $window + $penalty;
+        return (float)round($reward, 4);
     }
 
-    private function getAvailableActions(string $lastAction): array
-    {
-        $allActions = $this->_getActionPairs();
-        if ($lastAction === '0:0') return $allActions;
-        
-        list($lastP, $lastF) = array_map('intval', explode(':', $lastAction));
-        $maxPDelta = $this->ReadPropertyInteger('MaxPowerDelta');
-        $maxFDelta = $this->ReadPropertyInteger('MaxFanDelta');
-        
-        $available = array_filter($allActions, function($pair) use ($lastP, $lastF, $maxPDelta, $maxFDelta) {
-            list($p, $f) = array_map('intval', explode(':', $pair));
-            return (abs($p - $lastP) <= $maxPDelta && abs($f - $lastF) <= $maxFDelta);
-        });
-        
-        return !empty($available) ? array_values($available) : [$lastAction];
-    }
+    // -------------------- Coil / Safety (Änderung 2) --------------------
 
-    private function _getActionPairs(): array
+    private function coilProtectionOk(): bool
     {
-        $getLevels = function(string $customProp, int $stepProp): array {
-            $levels = [];
-            $custom = trim($this->ReadPropertyString($customProp));
-            if (!empty($custom)) {
-                $levels = array_map('intval', explode(',', $custom));
-            } else {
-                for ($i = $stepProp; $i <= 100; $i += $stepProp) $levels[] = $i;
-            }
-            return array_unique(array_filter($levels, fn($l) => $l > 0 && $l <=100));
-        };
+        if (!$this->ReadPropertyBoolean('AbortOnCoilFreeze')) return true;
 
-        $powerLevels = $getLevels('CustomPowerLevels', $this->ReadPropertyInteger('PowerStep'));
-        $fanLevels = $getLevels('CustomFanSpeeds', $this->ReadPropertyInteger('FanStep'));
-        
-        $actions = ['0:0'];
-        foreach ($powerLevels as $p) {
-            foreach ($fanLevels as $f) $actions[] = "$p:$f";
+        $link = (int)$this->ReadPropertyInteger('CoilTempLink');
+        if ($link <= 0 || !IPS_VariableExists($link)) return true;
+
+        $coil = @GetValue($link);
+        if (!is_numeric($coil)) return true;
+
+        $coil = (float)$coil;
+        $min  = (float)$this->ReadPropertyFloat('MinCoilTemp');
+        if ($coil <= $min) {
+            $this->log(1, 'coil_below_min', ['coil'=>$coil,'min'=>$min]);
+            return false;
         }
-        return array_unique($actions);
-    }
 
-    // --- State & Utility Functions ---
-
-    private function IsCoolingNeeded($rooms): bool
-    {
-        if (!is_array($rooms)) return false;
-        $isStandalone = $this->ReadPropertyString('OperatingMode') === 'standalone';
-        
-        foreach ($rooms as $room) {
-            if ($isStandalone) {
-                if (($room['tempID'] ?? 0) > 0 && ($room['targetID'] ?? 0) > 0 && IPS_VariableExists($room['tempID']) && IPS_VariableExists($room['targetID']) && GetValue($room['tempID']) > (GetValue($room['targetID']) + ($room['threshold'] ?? 0.5))) return true;
-            } else {
-                if (($room['demandID'] ?? 0) > 0 && IPS_VariableExists($room['demandID']) && GetValueInteger($room['demandID']) > 0) return true;
+        // Abfallrate (K/min) (einfacher Prädiktor)
+        $now  = time();
+        $key  = 'coil_last';
+        $last = $this->GetBuffer($key);
+        if ($last) {
+            $obj = json_decode($last, true);
+            if (isset($obj['t'],$obj['v']) && is_numeric($obj['t']) && is_numeric($obj['v'])) {
+                $dt = max(1, $now - (int)$obj['t']);
+                $rate = ((float)$obj['v'] - $coil) * 60.0 / $dt; // positiv = fällt
+                $maxDrop = (float)$this->ReadPropertyFloat('MaxCoilDropRate');
+                if ($rate > $maxDrop) {
+                    $this->log(1, 'coil_drop_rate', ['rate_K_min'=>$rate,'max'=>$maxDrop]);
+                    return false;
+                }
             }
         }
+        $this->SetBuffer($key, json_encode(['t'=>$now,'v'=>$coil]));
+        return true;
+    }
+
+    // -------------------- Epsilon (Änderung 3) --------------------
+
+    private function initExploration(): void
+    {
+        $this->WriteAttributeFloat('Epsilon', (float)$this->ReadPropertyFloat('EpsilonStart'));
+        $this->log(2, 'epsilon_init', ['eps'=>$this->ReadPropertyFloat('EpsilonStart')]);
+    }
+
+    private function annealEpsilon(): void
+    {
+        $eps   = (float)$this->ReadAttributeFloat('Epsilon');
+        if ($eps <= 0.0) $eps = (float)$this->ReadPropertyFloat('EpsilonStart');
+        $emin  = (float)$this->ReadPropertyFloat('EpsilonMin');
+        $decay = (float)$this->ReadPropertyFloat('EpsilonDecay');
+        $eps   = max($emin, $eps * $decay);
+        $this->WriteAttributeFloat('Epsilon', $eps);
+        $this->log(3, 'epsilon_anneal', ['eps'=>$eps]);
+    }
+
+    // -------------------- ZDM Aggregates (Änderung 4) --------------------
+
+    private function fetchZDMAggregates(): ?array
+    {
+        $iid = (int)$this->ReadPropertyInteger('ZDM_InstanceID');
+        if ($iid <= 0 || !IPS_InstanceExists($iid)) return null;
+        try {
+            $json = @ZDM_GetAggregates($iid);
+            $arr  = json_decode((string)$json, true);
+            return is_array($arr) ? $arr : null;
+        } catch (\Throwable $e) {
+            $this->log(1, 'zdm_agg_err', ['msg'=>$e->getMessage()]);
+            return null;
+        }
+    }
+
+    // -------------------- Q-Table Persistenz (Änderung 5) --------------------
+
+    private function persistQTableIfNeeded(): void
+    {
+        $q = $this->loadQTable();
+        $this->saveQTableAtomic(json_encode($q, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    private function loadQTable(): array
+    {
+        $path = trim($this->ReadPropertyString('QTablePath'));
+        if ($path !== '' && is_file($path)) {
+            $s = @file_get_contents($path);
+            $j = json_decode((string)$s, true);
+            if (is_array($j)) return $j;
+        }
+        $j = json_decode($this->ReadAttributeString('QTable'), true);
+        return is_array($j) ? $j : [];
+    }
+
+    private function storeQTable(array $q): void
+    {
+        // Cache in Attribut (für UI), finaler Save in persistQTableIfNeeded()
+        $this->WriteAttributeString('QTable', json_encode($q, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    private function saveQTableAtomic(string $json): void
+    {
+        $path = trim($this->ReadPropertyString('QTablePath'));
+        if ($path === '') {
+            // Attribut als Fallback
+            $this->WriteAttributeString('QTable', $json);
+            return;
+        }
+        $tmp = $path.'.tmp';
+        if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
+            $this->log(0, 'q_save_tmp_failed', ['tmp'=>$tmp]);
+            return;
+        }
+        if (!@rename($tmp, $path)) {
+            $this->log(0, 'q_save_rename_failed', ['from'=>$tmp,'to'=>$path]);
+            @unlink($tmp);
+            return;
+        }
+        $this->log(2, 'q_saved', ['path'=>$path]);
+    }
+
+    // -------------------- Actions / Outputs --------------------
+
+    private function applyAction(int $p, int $f): void
+    {
+        $p = max(0, min(100, $p));
+        $f = max(0, min(100, $f));
+        $this->setPercent($this->ReadPropertyInteger('PowerOutputLink'), $p);
+        $this->setPercent($this->ReadPropertyInteger('FanOutputLink'),   $f);
+        $this->WriteAttributeString('LastAction', $p.':'.$f);
+        $this->log(2, 'apply_action', ['p'=>$p,'f'=>$f]);
+    }
+
+    private function limitDeltas(int $p, int $f): array
+    {
+        if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
+            $lp = (int)$m[1]; $lf = (int)$m[2];
+            $dpMax = max(0, (int)$this->ReadPropertyInteger('MaxPowerDelta'));
+            $dfMax = max(0, (int)$this->ReadPropertyInteger('MaxFanDelta'));
+            if (abs($p - $lp) > $dpMax) $p = ($p > $lp) ? $lp + $dpMax : $lp - $dpMax;
+            if (abs($f - $lf) > $dfMax) $f = ($f > $lf) ? $lf + $dfMax : $lf - $dfMax;
+        }
+        return [$p, $f];
+    }
+
+    private function setPercent(int $varID, int $val): void
+    {
+        if ($varID <= 0 || !IPS_VariableExists($varID)) return;
+        $vt = IPS_GetVariable($varID)['VariableType'] ?? -1;
+        switch ($vt) {
+            case 0: @RequestAction($varID, $val >= 1); break; // bool → on/off
+            case 1: @RequestAction($varID, (int)$val); break; // int
+            case 2: @RequestAction($varID, (float)$val); break; // float
+            case 3: @RequestAction($varID, (string)$val); break; // string
+            default: @SetValue($varID, $val); break;
+        }
+    }
+
+    // -------------------- Allowed Actions --------------------
+
+    private function getAllowedActionPairs(): array
+    {
+        // Aus Custom-Listen bauen (Fallback auf gleichmäßige Steps)
+        $powers = $this->parseIntList($this->ReadPropertyString('CustomPowerLevels'), 0, 100, $this->ReadPropertyInteger('PowerStep'));
+        $fans   = $this->parseIntList($this->ReadPropertyString('CustomFanSpeeds'),   0, 100, $this->ReadPropertyInteger('FanStep'));
+
+        $map = [];
+        foreach ($powers as $p) {
+            foreach ($fans as $f) {
+                $map[$p.':'.$f] = true;
+            }
+        }
+        return $map;
+    }
+
+    private function validateActionPair(string $pair): ?array
+    {
+        if (!preg_match('/^\s*(\d{1,3})\s*:\s*(\d{1,3})\s*$/', $pair, $m)) return null;
+        $p = min(100, max(0, (int)$m[1]));
+        $f = min(100, max(0, (int)$m[2]));
+
+        $allowed = $this->getAllowedActionPairs();
+        if (!$allowed) return [$p, $f];
+
+        $key = $p.':'.$f;
+        if (isset($allowed[$key])) return [$p, $f];
+
+        // Nächstliegende erlaubte Aktion
+        $best = $this->nearestAction($p, $f, array_keys($allowed));
+        [$p, $f] = array_map('intval', explode(':', $best));
+        $this->log(1, 'action_adjusted_to_allowed', ['req'=>$key,'adj'=>$best]);
+        return [$p, $f];
+    }
+
+    private function nearestAction(int $p, int $f, array $keys): string
+    {
+        $best = null; $bd = PHP_INT_MAX;
+        foreach ($keys as $k) {
+            [$ap, $af] = array_map('intval', explode(':', $k));
+            $d = ($ap - $p) * ($ap - $p) + ($af - $f) * ($af - $f);
+            if ($d < $bd) { $bd = $d; $best = $k; }
+        }
+        return $best ?? '0:0';
+    }
+
+    private function bestActionForState(array $state, array $allowedKeys): string
+    {
+        $q = $this->loadQTable();
+        $sKey = $this->stateKey($state);
+
+        $bestKey = $allowedKeys[0] ?? '0:0';
+        $bestVal = -INF;
+
+        foreach ($allowedKeys as $k) {
+            $val = $q[$sKey][$k] ?? 0.0;
+            if ($val > $bestVal) { $bestVal = $val; $bestKey = $k; }
+        }
+        return $bestKey;
+    }
+
+    // -------------------- Utils --------------------
+
+    private function stateKey(array $s): string
+    {
+        // einfache Serialisierung; für mehr Stabilität ggf. binning/rounding nutzen
+        return md5(json_encode($s));
+    }
+
+    private function parseIntList(string $csv, int $min, int $max, int $fallbackStep): array
+    {
+        $arr = array_filter(array_map('trim', explode(',', $csv)), 'strlen');
+        $out = [];
+        foreach ($arr as $x) {
+            if (is_numeric($x)) {
+                $v = (int)$x;
+                if ($v >= $min && $v <= $max) $out[$v] = true;
+            }
+        }
+        if (empty($out)) {
+            // fallback auf Schritte
+            for ($v = $min; $v <= $max; $v += max(1, (int)$fallbackStep)) $out[$v] = true;
+        }
+        ksort($out, SORT_NUMERIC);
+        return array_keys($out);
+    }
+
+    private function getRooms(): array
+    {
+        $json = $this->ReadPropertyString('MonitoredRooms') ?: '[]';
+        $arr  = json_decode($json, true);
+        return is_array($arr) ? $arr : [];
+    }
+
+    private function roomWindowOpen(array $room): bool
+    {
+        // Wenn du Fenster pro Raum hast, hier anschließen; sonst false
+        // (Fensterlogik liegt im ZDM; hier nur Platzhalter)
         return false;
     }
-    
-    // =================================================================================
-    // THIS FUNCTION'S RETURN VALUE IS NOW CORRECT (5 elements)
-    // =================================================================================
-    private function discretizeRoomState(array $rooms): array
+
+    private function getFloat(int $varID): float
     {
-        $wDevSum = 0.0; $totalSize = 0.0; $D_cold = 0.0; $hotRooms = 0; $maxDev = 0.0;
-        if (is_array($rooms)) {
-            foreach ($rooms as $room) {
-                if (!($room['tempID'] > 0 && $room['targetID'] > 0 && IPS_VariableExists($room['tempID']) && IPS_VariableExists($room['targetID']))) continue;
-                $dev = GetValue($room['tempID']) - GetValue($room['targetID']);
-                if ($dev > 0) $maxDev = max($maxDev, $dev);
-                if ($dev < 0) $D_cold = max($D_cold, -$dev);
-                if ($dev > ($room['threshold'] ?? 0.5)) {
-                    $hotRooms++;
-                    $wDevSum += $dev * ($room['size'] ?? 10);
-                    $totalSize += ($room['size'] ?? 10);
-                }
-            }
-        }
-        $rawWAD = ($totalSize > 0) ? ($wDevSum / $totalSize) : 0.0;
-        return [min(5,(int)floor($maxDev)), min(3,(int)floor($D_cold)), min(4,$hotRooms), $rawWAD, $D_cold];
-    }
-    
-    private function getCoilTrendBin(float $current, float $prev): int {
-        $delta = $current - $prev;
-        if ($delta < -0.2) return -1; elseif ($delta > 0.2) return 1;
-        return 0;
-    }
-    
-    private function calculateEnergyReward(int $p, int $f): float {
-        if ($p==0 && $f==0) return 0.0;
-        $pn = $p/100.0; $fn = $f/100.0;
-        return -0.05 * (0.6*((0.4*$pn)+0.6*pow($pn-0.5,2)) + 0.4*pow($fn,3));
-    }
-    
-    private function decayEpsilon()
-    {
-        $this->WriteAttributeFloat('Epsilon', max(0.01, $this->ReadAttributeFloat('Epsilon') * (1 - $this->ReadPropertyFloat('DecayRate'))));
+        if ($varID <= 0 || !IPS_VariableExists($varID)) return NAN;
+        $v = @GetValue($varID);
+        return is_numeric($v) ? (float)$v : NAN;
     }
 
-    private function ShutdownSystem(array $returnValue): array
+    private function isTruthyVar(int $varID): bool
     {
-        $powerID = $this->ReadPropertyInteger('PowerOutputLink');
-        $fanID = $this->ReadPropertyInteger('FanOutputLink');
-        if ($powerID > 0 && IPS_VariableExists($powerID)) RequestAction($powerID, 0);
-        if ($fanID > 0 && IPS_VariableExists($fanID)) RequestAction($fanID, 0);
-        return $returnValue;
+        if ($varID <= 0 || !IPS_VariableExists($varID)) return false;
+        $v = @GetValue($varID);
+        if (is_bool($v))   return $v;
+        if (is_numeric($v))return ((float)$v) > 0;
+        if (is_string($v)) return in_array(mb_strtolower(trim($v)), ['1','true','on'], true);
+        return false;
     }
 
-    private function GenerateQTableHTML(): string
+    // -------------------- Logging (Änderung 6) --------------------
+
+    /**
+     * $lvl: 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG
+     */
+    private function log(int $lvl, string $event, array $data = []): void
     {
-        $qTable = json_decode($this->ReadAttributeString('QTable'), true);
-        if (!is_array($qTable) || empty($qTable)) return '<p>Q-Table is empty or not yet initialized.</p>';
-        
-        ksort($qTable);
-        $actions = $this->_getActionPairs();
-        $html = '<!DOCTYPE html><html><head><style>body{font-family:sans-serif;font-size:12px;}table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ccc;padding:4px;text-align:center;}th{background-color:#f2f2f2;position:sticky;top:0;}td.state-col{text-align:left;font-weight:bold;background-color:#f8f8f8;position:sticky;left:0;}</style></head><body><table><thead><tr><th class="state-col">State</th>';
-        foreach ($actions as $action) $html .= "<th>{$action}</th>";
-        $html .= '</tr></thead><tbody>';
-        
-        $minQ = 0; $maxQ = 0;
-        foreach ($qTable as $stateActions) {
-            if (is_array($stateActions)) {
-                foreach ($stateActions as $qValue) {
-                    if ($qValue != self::OPTIMISTIC_INIT) {
-                        $minQ = min($minQ, $qValue);
-                        $maxQ = max($maxQ, $qValue);
-                    }
-                }
-            }
-        }
-        
-        foreach ($qTable as $state => $stateActions) {
-            $html .= "<tr><td class='state-col'>{$state}</td>";
-            if(is_array($stateActions)) {
-                foreach ($actions as $action) {
-                    $qValue = $stateActions[$action] ?? self::OPTIMISTIC_INIT;
-                    $color = '#f0f0f0';
-                    if ($qValue != self::OPTIMISTIC_INIT) {
-                         if ($maxQ == $minQ) $color = '#90ee90';
-                         else if ($qValue >= 0) {
-                             $p = ($maxQ > 0) ? ($qValue / $maxQ) : 0;
-                             $color = sprintf('#%02x%02x%02x', 255 - (int)(100 * $p), 255, 255 - (int)(100 * $p));
-                         } else {
-                             $p = ($minQ < 0) ? ($qValue / $minQ) : 0;
-                             $color = sprintf('#%02x%02x%02x', 255, 255 - (int)(150 * $p), 255 - (int)(150 * $p));
-                         }
-                    }
-                    $html .= sprintf('<td style="background-color:%s;">%.2f</td>', $color, $qValue);
-                }
-            }
-            $html .= '</tr>';
-        }
-        
-        return $html . '</tbody></table></body></html>';
-    }
-    
-    private function Log(string $m, int $l): void {
-        if ($this->ReadPropertyInteger('LogLevel') >= $l) $this->LogMessage($m, ($l == 4 ? KL_DEBUG : KL_MESSAGE));
+        $cfg = (int)$this->ReadPropertyInteger('LogLevel');
+        if ($lvl > $cfg) return;
+
+        $line = json_encode(
+            ['t'=>time(),'lvl'=>$lvl,'ev'=>$event,'data'=>$data],
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+
+        $prio = KL_MESSAGE;
+        if ($lvl === 0) $prio = KL_ERROR;
+        elseif ($lvl === 1) $prio = KL_WARNING;
+
+        $this->LogMessage("ADHVAC ".$line, $prio);
+        // Optional zusätzlich:
+        // $this->SendDebug('ADHVAC', $line, 0);
     }
 }
+
