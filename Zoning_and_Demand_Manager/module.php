@@ -243,36 +243,50 @@ class Zoning_and_Demand_Manager extends IPSModule
         $maxDeltaT = 0.0;
         $anyWindow = false;
         $activeRooms = [];
-
+    
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
-
+    
+        // NEW: accumulate a simple numeric "cooling demand" (sum of positive deltas beyond hysteresis)
+        $totalCoolingDemand = 0.0;
+    
         foreach ($rooms as $r) {
             $ist  = $this->GetFloat((int)($r['tempID'] ?? 0));
             $soll = $this->GetFloat((int)($r['targetID'] ?? 0));
             $win  = $this->isWindowOpenStable($r);
-
+    
             if (is_finite($ist) && is_finite($soll)) {
                 $delta = $ist - $soll; // >0 = Kühlbedarf
                 if (!$win && ($delta > $hyst)) {
                     $numActive++;
                     $activeRooms[] = (string)($r['name'] ?? 'room');
                     $maxDeltaT = max($maxDeltaT, abs($delta));
+    
+                    // accumulate demand beyond hysteresis (e.g., 27-24=3, hyst=0.5 → 2.5)
+                    $totalCoolingDemand += max(0.0, $delta - $hyst);
                 }
             }
             $anyWindow = $anyWindow || $win;
         }
-
+    
+        // NEW: explicit boolean that Adaptive can rely on
+        $coolingDemand = ($numActive > 0) || ($totalCoolingDemand > 0.0);
+    
         $agg = [
-            'numActiveRooms' => $numActive,
-            'maxDeltaT'      => round($maxDeltaT, 2),
-            'anyWindowOpen'  => $anyWindow,
-            'activeRooms'    => $activeRooms
+            'numActiveRooms'     => $numActive,
+            'maxDeltaT'          => round($maxDeltaT, 2),
+            'anyWindowOpen'      => $anyWindow,
+            'activeRooms'        => $activeRooms,
+            // --- NEW fields used by Adaptive ---
+            'coolingDemand'      => $coolingDemand,                 // boolean
+            'totalCoolingDemand' => round($totalCoolingDemand, 3)   // numeric indicator
         ];
+    
         $this->WriteAttributeString('LastAggregates', json_encode($agg));
         $this->log(3, 'agg', $agg);
-
+    
         return json_encode($agg);
     }
+
 
     // ---------- Intern: Flaps/System ----------
 
