@@ -373,7 +373,21 @@ class HVAC_Learning_Orchestrator extends IPSModule
         }
         return $structured;
     }
-
+    private function GeneratePlanHTML(array $plan): string
+    {
+        $html = '<!DOCTYPE html><html><head><title>HVAC Plan</title><style>body{font-family:sans-serif;font-size:14px;margin:10px;}table{width:100%;border-collapse:collapse;margin-top:15px;}th,td{border:1px solid #dee2e6;padding:10px 12px;text-align:left;word-break:break-word;}thead{background-color:#e9ecef;}h2{color:#343a40;border-bottom:2px solid #ced4da;padding-bottom:5px;}</style></head><body><h2>Generated Plan</h2>';
+        if (empty($plan)) return $html . '<p>No plan generated.</p></body></html>';
+        $html .= '<table><thead><tr><th>Stage Name</th><th>Flap Config</th><th>Offset</th><th>Action Pattern</th></tr></thead><tbody>';
+        foreach ($plan as $stage) {
+            $html .= sprintf('<tr><td>%s</td><td>%s</td><td>%s &deg;C</td><td>%s</td></tr>',
+                htmlspecialchars($stage['stageName'] ?? 'N/A'),
+                htmlspecialchars($stage['flapConfig'] ?? 'N/A'),
+                htmlspecialchars($stage['targetOffset'] ?? 'N/A'),
+                htmlspecialchars($stage['actionPattern'] ?? 'N/A')
+            );
+        }
+        return $html . '</tbody></table></body></html>';
+    }
     private function getRoomLinks(): array
     {
         $zid = (int)$this->ReadPropertyInteger('ZoningManagerID');
