@@ -1,90 +1,177 @@
 {
-    "elements": [
-        { "type": "Label", "label": "This module adaptively controls an AC system using Q-learning." },
-        { "type": "Label", "label": " " },
-        { "type": "Label", "label": "--- Core Links ---" },
-        { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
-        { "type": "SelectVariable", "name": "PowerOutputLink", "caption": "Power Output Link" },
-        { "type": "SelectVariable", "name": "FanOutputLink", "caption": "Fan Output Link" },
-        { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
-        { "type": "SelectVariable", "name": "MinCoilTempLink", "caption": "Min Coil Temperature Link" },
-        { "type": "Label", "label": " " },
+  "elements": [
+    { "type": "Label", "label": "--- Core Module Links ---" },
+    { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
+    { "type": "SelectVariable", "name": "PowerOutputLink", "caption": "Power Output Link" },
+    { "type": "SelectVariable", "name": "FanOutputLink", "caption": "Fan Output Link" },
+    { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
+    { "type": "SelectVariable", "name": "MinCoilTempLink", "caption": "Min Coil Temp Link" },
+
+    { "type": "Label", "label": "--- Monitored Rooms ---" },
+    {
+      "type": "List",
+      "name": "MonitoredRooms",
+      "caption": "Monitored Rooms",
+      "add": true,
+      "delete": true,
+      "columns": [
         {
-            "type": "List",
-            "name": "MonitoredRooms",
-            "caption": "Monitored Rooms",
-            "rowCount": 5,
-            "add": true,
-            "delete": true,
-            "columns": [
-                { "caption": "Temp Sensor", "name": "tempID", "width": "250px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Target Temp", "name": "targetID", "width": "250px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Demand Variable (Optional)", "name": "demandID", "width": "250px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Room Size", "name": "size", "width": "100px", "add": 10, "edit": { "type": "NumberSpinner" } },
-                { "caption": "Threshold (°)", "name": "threshold", "width": "100px", "add": 0.5, "edit": { "type": "NumberSpinner", "digits": 1 } }
-            ]
+          "caption": "Room Name",
+          "name": "name",
+          "width": "150px",
+          "add": "New Room",
+          "edit": { "type": "ValidationTextBox" }
         },
-        { "type": "Label", "label": " " },
-        { "type": "Label", "label": "--- Settings & Diagnostics ---" },
-        { 
-            "type": "ExpansionPanel", 
-            "caption": "Advanced Settings & Diagnostics", 
-            "items": [
-                { "type": "CheckBox", "name": "ManualOverride", "caption": "Manual Override" },
-                { 
-                    "type": "Select", 
-                    "name": "OperatingMode", 
-                    "caption": "Operating Mode", 
-                    "options": [
-                        {"label":"Cooperative (with Zoning & Demand Manager)", "value":"cooperative"},
-                        {"label":"Standalone", "value":"standalone"},
-                        {"label":"Orchestrated (External Control by Orchestrator)", "value":"orchestrated"} 
-                    ], 
-                    "defaultValue": "cooperative"
-                },
-                { "type": "Select", "name": "LogLevel", "caption": "Log Level", "options": [{"label":"Off","value":0},{"label":"Error","value":1},{"label":"Warning","value":2},{"label":"Info","value":3},{"label":"Debug","value":4}], "defaultValue": 3},
-                { "type": "Label", "label": " " },
-                { "type": "Label", "label": "Hyperparameters (for learning):" },
-                { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (Learning Rate)", "info": "Recommended for learning: 0.1", "suffix": "", "digits": 2, "defaultValue": 0.1 },
-                { "type": "NumberSpinner", "name": "Gamma", "caption": "Gamma (Discount Factor)", "suffix": "", "digits": 2, "defaultValue": 0.9 },
-                { "type": "NumberSpinner", "name": "DecayRate", "caption": "Epsilon Decay Rate", "info": "Recommended for learning: 0.001", "suffix": "", "digits": 4, "defaultValue": 0.001 },
-                { "type": "Label", "label": " " },
-                { "type": "Label", "label": "System & Action Settings:" },
-                { 
-                    "type": "ValidationTextBox", 
-                    "name": "CustomPowerLevels", 
-                    "caption": "Custom Power Levels", 
-                    "info": "Enter specific power levels separated by commas (e.g., 30,55,75,100). Overrides 'Power Step Size'." 
-                },
-                { 
-                    "type": "NumberSpinner", 
-                    "name": "PowerStep", 
-                    "caption": "Power Step Size (Fallback)", 
-                    "suffix": "%", 
-                    "defaultValue": 20 
-                },
-                { 
-                    "type": "ValidationTextBox", 
-                    "name": "CustomFanSpeeds", 
-                    "caption": "Custom Fan Speeds", 
-                    "info": "Enter specific fan speed levels separated by commas (e.g., 30,60,90). Overrides 'Fan Step Size'." 
-                },
-                { 
-                    "type": "NumberSpinner", 
-                    "name": "FanStep", 
-                    "caption": "Fan Step Size (Fallback)", 
-                    "suffix": "%", 
-                    "defaultValue": 20 
-                },
-                { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Timer Interval (seconds)", "suffix": "s", "defaultValue": 120 },
-                { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (Global)", "suffix": "°", "digits": 1, "defaultValue": 0.5 },
-                { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Change per Step", "suffix": "%", "defaultValue": 40 },
-                { "type": "NumberSpinner", "name": "MaxFanDelta", "caption": "Max Fan Change per Step", "suffix": "%", "defaultValue": 40 }
-            ]
+        {
+          "caption": "Temp Sensor (IST)",
+          "name": "tempID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
+        },
+        {
+          "caption": "Target Temp (SOLL)",
+          "name": "targetID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
+        },
+        {
+          "caption": "Demand Output",
+          "name": "demandID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
+        },
+        {
+          "caption": "Room Size (m²)",
+          "name": "size",
+          "width": "100px",
+          "add": 20,
+          "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 200 }
+        },
+        {
+          "caption": "Threshold (°C)",
+          "name": "threshold",
+          "width": "100px",
+          "add": 0.5,
+          "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0.0, "maximum": 5.0 }
         }
-    ],
-    "actions": [
-        { "type": "Button", "label": "Reset Learning", "onClick": "ACIPS_ResetLearning($id);" },
-        { "type": "Button", "label": "Update Visualization", "onClick": "ACIPS_UpdateVisualization($id);" }
-    ]
+      ]
+    },
+
+    { "type": "Label", "label": "--- Learning / Exploration ---" },
+    {
+      "type": "NumberSpinner",
+      "name": "EpsilonStart",
+      "caption": "Epsilon start",
+      "digits": 3,
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "value": 0.40
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "EpsilonMin",
+      "caption": "Epsilon min",
+      "digits": 3,
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "value": 0.05
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "EpsilonDecay",
+      "caption": "Epsilon decay (per step)",
+      "digits": 5,
+      "minimum": 0.90000,
+      "maximum": 0.99999,
+      "value": 0.995
+    },
+
+    { "type": "Label", "label": "--- Coil Safety ---" },
+    {
+      "type": "NumberSpinner",
+      "name": "MinCoilTemp",
+      "caption": "Min coil temperature (°C)",
+      "digits": 1,
+      "minimum": -5.0,
+      "maximum": 10.0,
+      "value": 2.0
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "MaxCoilDropRate",
+      "caption": "Max coil drop rate (K/min)",
+      "digits": 2,
+      "minimum": 0.0,
+      "maximum": 10.0,
+      "value": 1.5
+    },
+    {
+      "type": "CheckBox",
+      "name": "AbortOnCoilFreeze",
+      "caption": "Abort on coil freeze indicators",
+      "value": true
+    },
+
+    { "type": "Label", "label": "--- ZDM Integration ---" },
+    {
+      "type": "SelectInstance",
+      "name": "ZDM_InstanceID",
+      "caption": "ZDM instance (for aggregates)"
+    },
+
+    { "type": "Label", "label": "--- System & Action Settings ---" },
+    { "type": "CheckBox", "name": "ManualOverride", "caption": "Manual Override" },
+    {
+      "type": "Select",
+      "name": "OperatingMode",
+      "caption": "Operating Mode",
+      "options": [
+        { "label": "Cooling", "value": 0 },
+        { "label": "Heating", "value": 1 },
+        { "label": "Auto", "value": 2 }
+      ]
+    },
+    {
+      "type": "Select",
+      "name": "LogLevel",
+      "caption": "Log Level",
+      "options": [
+        { "label": "Error only", "value": 0 },
+        { "label": "Warnings", "value": 1 },
+        { "label": "Info", "value": 2 },
+        { "label": "Debug (all messages)", "value": 3 }
+      ],
+      "value": 3
+    },
+    { "type": "NumberSpinner", "name": "Alpha", "caption": "Alpha (learning rate)", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.05 },
+    { "type": "NumberSpinner", "name": "Gamma", "caption": "Gamma (discount factor)", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.9 },
+    { "type": "NumberSpinner", "name": "DecayRate", "caption": "Decay rate", "digits": 5, "minimum": 0.0, "maximum": 1.0, "value": 0.005 },
+    { "type": "ValidationTextBox", "name": "CustomPowerLevels", "caption": "Custom Power Levels (%)", "value": "0,40,80,100" },
+    { "type": "NumberSpinner", "name": "PowerStep", "caption": "Power Step (%)", "digits": 0, "minimum": 1, "maximum": 100, "value": 20 },
+    { "type": "ValidationTextBox", "name": "CustomFanSpeeds", "caption": "Custom Fan Speeds (%)", "value": "0,40,80,100" },
+    { "type": "NumberSpinner", "name": "FanStep", "caption": "Fan Step (%)", "digits": 0, "minimum": 1, "maximum": 100, "value": 20 },
+    { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "digits": 0, "minimum": 5, "maximum": 600, "value": 60 },
+    { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (°C)", "digits": 1, "minimum": 0.1, "maximum": 5.0, "value": 0.5 },
+    { "type": "NumberSpinner", "name": "MaxPowerDelta", "caption": "Max Power Delta (%)", "digits": 0, "minimum": 0, "maximum": 100, "value": 40 },
+    { "type": "NumberSpinner", "name": "MaxFanDelta", "caption": "Max Fan Delta (%)", "digits": 0, "minimum": 0, "maximum": 100, "value": 40 },
+
+    { "type": "Label", "label": "--- Persistence ---" },
+    {
+      "type": "ValidationTextBox",
+      "name": "QTablePath",
+      "caption": "Q-table file path (optional)",
+      "info": "Leave empty to store Q-table in attributes"
+    }
+  ],
+  "actions": [
+    { "type": "Button", "label": "Reset Learning", "onClick": "ADHVAC_ResetLearning($id);" },
+    { "type": "Button", "label": "Update Visualization", "onClick": "ADHVAC_UpdateVisualization($id);" }
+  ],
+  "status": [
+    { "code": 102, "icon": "active", "caption": "Active" },
+    { "code": 202, "icon": "error", "caption": "Configuration incomplete" }
+  ]
 }
