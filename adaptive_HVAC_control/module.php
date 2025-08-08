@@ -86,6 +86,8 @@ class adaptive_HVAC_control extends IPSModule
         // Timer → wrapper via module.json prefix (assumed "ACIPS")
         $this->RegisterTimer('LearningTimer', 0, 'ACIPS_ProcessLearning($_IPS[\'TARGET\']);');
         $this->RegisterAttributeBoolean('MigratedNaming', false);
+        $this->RegisterPropertyInteger('OperatingMode', 2); // 0=Cooling, 1=Heating, 2=Auto/Cooperative
+
     }
 
     public function ApplyChanges()
