@@ -144,7 +144,7 @@ class adaptive_HVAC_control extends IPSModule
      * Accepts int or string and normalizes to 0..2
      * 0=Cooling, 1=Heating, 2=Auto/Cooperative
      */
-    public function SetMode($mode): void
+    public function SetMode(string $mode): void
     {
         $map = [
             '0' => 0, 'cool' => 0, 'cooling' => 0,
