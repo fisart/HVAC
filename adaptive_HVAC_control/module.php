@@ -1,6 +1,6 @@
 <?php
 /**
- * Adaptive HVAC Control
+ * Adaptive HVAC Control A
  *
  * Version: 2.8 (Epsilon-Schedule, Coil-Watchdog, ZDM Aggregates, Atomic Q-Persist, Console Logging)
  * Author:  Artur Fischer & AI Consultant
