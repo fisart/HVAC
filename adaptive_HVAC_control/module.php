@@ -136,18 +136,45 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
-    public function SetMode(int $mode): void
+   public function SetMode($mode): void
     {
-        // clamp to 0..2 (Cooling/Heating/Auto)
+        // Accept int or string; map strings to enum 0..2
+        // 0=Cooling, 1=Heating, 2=Auto
+        $map = [
+            '0' => 0, 'cool' => 0, 'cooling' => 0,
+            '1' => 1, 'heat' => 1, 'heating' => 1,
+            '2' => 2, 'auto' => 2,
+            // Orchestrator-friendly labels (no functional change here, map to Auto)
+            'cooperative' => 2,
+            'standalone'  => 2
+        ];
+    
+        if (is_string($mode)) {
+            $key = mb_strtolower(trim($mode));
+            if (array_key_exists($key, $map)) {
+                $mode = $map[$key];
+            } else {
+                // Unknown label → default to Auto
+                $this->log(1, 'set_mode_unknown_label', ['label' => $mode]);
+                $mode = 2;
+            }
+        }
+    
+        if (!is_int($mode)) {
+            $this->log(1, 'set_mode_type_error', ['given' => gettype($mode)]);
+            $mode = 2; // fallback to Auto
+        }
+    
+        // clamp to 0..2
         if ($mode < 0) $mode = 0;
         if ($mode > 2) $mode = 2;
     
-        // persist to property so it survives restarts
         IPS_SetProperty($this->InstanceID, 'OperatingMode', $mode);
         @IPS_ApplyChanges($this->InstanceID);
     
         $this->log(2, 'set_mode', ['mode' => $mode]);
     }
+
     
     public function GetMode(): int
     {
