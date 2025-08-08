@@ -1,64 +1,164 @@
 {
-    "elements": [
-        { "type": "CheckBox", "name": "StandaloneMode", "caption": "Standalone Mode" },
-        { "type": "Label", "label": "Activate to run without the adaptive_HVAC_control module." },
-        { "type": "Label", "label": " " },
-        { "type": "CheckBox", "name": "Debug", "caption": "Enable Debug Logging" },
-        { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "defaultValue": 60 },
-        { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (°)", "digits": 1, "defaultValue": 0.5 },
-        { "type": "Label", "label": " " },
-        { "type": "Label", "label": "--- System-Wide Overrides & Controls ---" },
-        { "type": "SelectVariable", "name": "HeatingActiveLink", "caption": "Heating Active Link (disables cooling)" },
-        { "type": "SelectVariable", "name": "VentilationActiveLink", "caption": "Ventilation Active Link (disables cooling)" },
-        { "type": "SelectVariable", "name": "MainACOnOffLink", "caption": "Main AC Unit (On/Off or Value)" },
-        { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Control (On/Off or Value)" },
-        { "type": "SelectVariable", "name": "MasterBedSpecialModeLink", "caption": "Master Bedroom Special Mode Link" },
-        { "type": "SelectVariable", "name": "MainStatusTextLink", "caption": "System Status Text Variable" },
-        { "type": "Label", "label": " " },
+  "elements": [
+    { "type": "CheckBox", "name": "StandaloneMode", "caption": "Standalone Mode" },
+    { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "digits": 0, "minimum": 5, "maximum": 600, "value": 60 },
+    { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (°C)", "digits": 1, "minimum": 0.1, "maximum": 5, "value": 0.5 },
+
+    { "type": "NumberSpinner", "name": "WindowDebounceSec", "caption": "Window/Door debounce (seconds)", "digits": 0, "minimum": 0, "maximum": 120, "value": 10 },
+    {
+      "type": "Select",
+      "name": "LogLevel",
+      "caption": "Log level",
+      "options": [
+        { "label": "Error only", "value": 0 },
+        { "label": "Warnings", "value": 1 },
+        { "label": "Info", "value": 2 },
+        { "label": "Debug (all messages)", "value": 3 }
+      ],
+      "value": 3
+    },
+
+    { "type": "Label", "label": "--- System-Wide Links ---" },
+    { "type": "SelectVariable", "name": "HeatingActiveLink", "caption": "Heating Active Link (disables cooling)" },
+    { "type": "SelectVariable", "name": "VentilationActiveLink", "caption": "Ventilation Active Link (disables cooling)" },
+    { "type": "SelectVariable", "name": "MainACOnOffLink", "caption": "Main AC Unit (On/Off or Value)" },
+    { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Control (On/Off or Value)" },
+
+    { "type": "Label", "label": "--- Standalone Mode Settings ---", "visible": "this.StandaloneMode" },
+    { "type": "NumberSpinner", "name": "ConstantPower", "caption": "Constant Power (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
+    { "type": "NumberSpinner", "name": "ConstantFanSpeed", "caption": "Constant Fan Speed (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
+
+    { "type": "Label", "label": "--- Controlled Rooms ---" },
+    {
+      "type": "List",
+      "name": "ControlledRooms",
+      "caption": "Controlled Rooms",
+      "rowCount": 8,
+      "add": true,
+      "delete": true,
+      "sort": { "column": "name", "direction": "ascending" },
+      "columns": [
         {
-            "type": "Label",
-            "label": "--- Standalone Mode Settings ---",
-            "visible": "this.StandaloneMode"
+          "caption": "Room Name",
+          "name": "name",
+          "width": "150px",
+          "add": "New Room",
+          "edit": { "type": "ValidationTextBox" }
         },
         {
-            "type": "NumberSpinner",
-            "name": "ConstantPower",
-            "caption": "Constant Power",
-            "suffix": "%",
-            "defaultValue": 80,
-            "visible": "this.StandaloneMode"
+          "caption": "Temp Sensor (IST)",
+          "name": "tempID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
         },
         {
-            "type": "NumberSpinner",
-            "name": "ConstantFanSpeed",
-            "caption": "Constant Fan Speed",
-            "suffix": "%",
-            "defaultValue": 80,
-            "visible": "this.StandaloneMode"
+          "caption": "Target Temp (SOLL)",
+          "name": "targetID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
         },
-        { "type": "Label", "label": " " },
         {
-            "type": "List",
-            "name": "ControlledRooms",
-            "caption": "Controlled Rooms",
-            "rowCount": 8,
-            "add": true,
-            "delete": true,
-            "columns": [
-                { "caption": "Room Name", "name": "name", "width": "150px", "add": "New Room", "edit": { "type": "ValidationTextBox" } },
-                { "caption": "Temp Sensor (IST)", "name": "tempID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Target Temp (SOLL)", "name": "targetID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Demand Output (to Adaptive Module)", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" }, "visible": "!this.StandaloneMode" },
-                { "caption": "Flap Control Variable", "name": "flapID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Flap Type", "name": "flapType", "width": "120px", "add": "boolean", "edit": { "type": "Select", "options": [{"label": "Boolean", "value": "boolean"}, {"label": "Linear (0-100)", "value": "linear"}] } },
-                { "caption": "Value for OPEN", "name": "flapOpenValue", "width": "100px", "add": "true", "edit": { "type": "ValidationTextBox" } },
-                { "caption": "Value for CLOSED", "name": "flapClosedValue", "width": "100px", "add": "false", "edit": { "type": "ValidationTextBox" } },
-                { "caption": "AC Mode Input (Air_Soll_Status)", "name": "airSollStatusID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Phase Info Output (Cooling_Phase_Info)", "name": "coolingPhaseInfoID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-                { "caption": "Window/Door Category", "name": "windowCatID", "width": "200px", "add": 0, "edit": { "type": "SelectCategory" } }
+          "caption": "Demand Output (to Adaptive Module)",
+          "name": "demandID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" },
+          "visible": "!this.StandaloneMode"
+        },
+        {
+          "caption": "Flap Control Variable",
+          "name": "flapID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
+        },
+        {
+          "caption": "Flap Type",
+          "name": "flapType",
+          "width": "140px",
+          "add": "boolean",
+          "edit": {
+            "type": "Select",
+            "options": [
+              { "label": "Boolean", "value": "boolean" },
+              { "label": "Linear (0-100)", "value": "linear" }
             ]
+          }
+        },
+        {
+          "caption": "Value for OPEN (boolean)",
+          "name": "flapOpenValue",
+          "width": "120px",
+          "add": "true",
+          "edit": { "type": "ValidationTextBox" },
+          "visible": "this.flapType === 'boolean'"
+        },
+        {
+          "caption": "Value for CLOSED (boolean)",
+          "name": "flapClosedValue",
+          "width": "120px",
+          "add": "false",
+          "edit": { "type": "ValidationTextBox" },
+          "visible": "this.flapType === 'boolean'"
+        },
+        {
+          "caption": "Open % (linear)",
+          "name": "flapOpenLinear",
+          "width": "120px",
+          "add": 100,
+          "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 },
+          "visible": "this.flapType === 'linear'"
+        },
+        {
+          "caption": "Closed % (linear)",
+          "name": "flapClosedLinear",
+          "width": "120px",
+          "add": 0,
+          "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 },
+          "visible": "this.flapType === 'linear'"
+        },
+        {
+          "caption": "AC Mode Input (Air_Soll_Status)",
+          "name": "airSollStatusID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
+        },
+        {
+          "caption": "Phase Info Output (Cooling_Phase_Info)",
+          "name": "coolingPhaseInfoID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectVariable" }
+        },
+        {
+          "caption": "Window/Door Category",
+          "name": "windowCatID",
+          "width": "200px",
+          "add": 0,
+          "edit": { "type": "SelectCategory" }
         }
-    ],
-    "actions": [],
-    "status": []
+      ]
+    },
+
+    { "type": "Label", "label": "--- Status ---" },
+    {
+      "type": "Label",
+      "label": "Override active (read-only):",
+      "bold": true
+    },
+    {
+      "type": "Label",
+      "name": "OverrideActive",
+      "caption": " ",
+      "visible": true
+    }
+  ],
+  "actions": [],
+  "status": [
+    { "code": 102, "icon": "active", "caption": "OK" },
+    { "code": 202, "icon": "error", "caption": "Configuration incomplete" }
+  ]
 }
