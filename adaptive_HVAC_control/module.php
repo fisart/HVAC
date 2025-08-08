@@ -160,7 +160,7 @@ class adaptive_HVAC_control extends IPSModule
     public function ACIPS_ForceActionAndLearn(string $pair): string
     {
         // Coil-Schutz
-        if (!$this->coilProtectionOk())) {
+        if (!$this->coilProtectionOk()) {
             $this->applyAction(0, 0);
             return json_encode(['ok'=>false,'err'=>'coil_protection']);
         }
