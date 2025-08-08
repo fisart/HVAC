@@ -85,40 +85,56 @@ class adaptive_HVAC_control extends IPSModule
 
         // Timer → wrapper via module.json prefix (assumed "ACIPS")
         $this->RegisterTimer('LearningTimer', 0, 'ACIPS_ProcessLearning($_IPS[\'TARGET\']);');
+        $this->RegisterAttributeBoolean('MigratedNaming', false);
     }
 
     public function ApplyChanges()
-    {
-        parent::ApplyChanges();
+{
+    parent::ApplyChanges();
 
-        // ---- Migration alt -> neu (nur einmalig, wenn neu leer/Default) ----
-        // MinCoilTemp -> MinCoilTempLearning
+    // ---- one-time migration (no recursion) ----
+    $migrated = (bool)$this->ReadAttributeBoolean('MigratedNaming');
+    if (!$migrated) {
+        $changed = false;
+
+        // MinCoilTemp -> MinCoilTempLearning (only if user had a non-default old value)
         $minLearn = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
         $minOld   = (float)$this->ReadPropertyFloat('MinCoilTemp');
         if (abs($minLearn - 2.0) < 0.0001 && abs($minOld - 2.0) > 0.0001) {
-            // Nutzer hatte alten Wert ≠ Default gesetzt → übernehmen
             IPS_SetProperty($this->InstanceID, 'MinCoilTempLearning', $minOld);
+            $changed = true;
         }
-        // MinCoilTempLink -> EmergencyCoilTempLink
+
+        // MinCoilTempLink -> EmergencyCoilTempLink (only if new is empty, old set)
         $emergLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
         $oldLink   = (int)$this->ReadPropertyInteger('MinCoilTempLink');
         if ($emergLink === 0 && $oldLink > 0) {
             IPS_SetProperty($this->InstanceID, 'EmergencyCoilTempLink', $oldLink);
-        }
-        // Commit migrations if any were changed
-        IPS_ApplyChanges($this->InstanceID); // safe: reenters but properties now final
-
-        $this->SetStatus(102);
-
-        $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
-        $this->SetTimerInterval('LearningTimer', $intervalMs);
-
-        if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
-            $this->initExploration();
+            $changed = true;
         }
 
-        $this->log(2, 'apply_changes', ['interval_ms'=>$intervalMs]);
+        if ($changed) {
+            $this->WriteAttributeBoolean('MigratedNaming', true);
+            @IPS_ApplyChanges($this->InstanceID); // re-enter ONCE with migrated props
+            return; // avoid continuing in the pre-migration context
+        } else {
+            // no migration needed; mark as done to avoid checking again
+            $this->WriteAttributeBoolean('MigratedNaming', true);
+        }
     }
+
+    // ---- normal ApplyChanges flow ----
+    $this->SetStatus(102);
+    $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
+    $this->SetTimerInterval('LearningTimer', $intervalMs);
+
+    if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
+        $this->initExploration();
+    }
+
+    $this->log(2, 'apply_changes', ['interval_ms' => $intervalMs]);
+}
+
 
     // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
 
