@@ -84,7 +84,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     // ---------- Public (Timer) ----------
 
-    public function ZDM_ProcessZoning()
+    public function ProcessZoning()
     {
         $this->ProcessZoning();
     }
@@ -180,7 +180,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     /**
      * Orchestrator setzt/löscht Override.
      */
-    public function ZDM_SetOverrideMode(bool $on): void
+    public function SetOverrideMode(bool $on): void
     {
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
@@ -201,7 +201,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     /**
      * Orchestrator kommandiert Klappen explizit: ["Living Room"=>true, "Kitchen"=>false, ...]
      */
-    public function ZDM_CommandFlaps(string $stageName, string $flapConfigJson): void
+    public function CommandFlaps(string $stageName, string $flapConfigJson): void
     {
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
@@ -229,7 +229,7 @@ class Zoning_and_Demand_Manager extends IPSModule
      * Orchestrator kommandiert Systemleistung (Power/Fan in %; 0..100).
      * Bei ungültigen Werten wird geklemmt.
      */
-    public function ZDM_CommandSystem(int $powerPercent, int $fanPercent): void
+    public function CommandSystem(int $powerPercent, int $fanPercent): void
     {
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
@@ -248,7 +248,7 @@ class Zoning_and_Demand_Manager extends IPSModule
      * Aggregates für Adaptive-Modul / Debug.
      * Rückgabe: JSON {"numActiveRooms":N,"maxDeltaT":x.xx,"anyWindowOpen":bool,"activeRooms":[...]}
      */
-    public function ZDM_GetAggregates(): string
+    public function GetAggregates(): string
     {
         $rooms = $this->getRooms();
         $numActive = 0;
