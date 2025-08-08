@@ -2,7 +2,7 @@
 /**
  * Adaptive HVAC Control 
  *
- * Version: 2.8 (Epsilon-Schedule, Coil-Watchdog, ZDM Aggregates, Atomic Q-Persist, Console Logging)
+ * Version: 2.8.1 (Prefix fix, Epsilon-Schedule, Coil-Watchdog, ZDM Aggregates, Atomic Q-Persist, Console Logging)
  * Author:  Artur Fischer & AI Consultant
  *
  * Kurz:
@@ -54,7 +54,7 @@ class adaptive_HVAC_control extends IPSModule
         // Monitored Rooms (aus deiner Form)
         $this->RegisterPropertyString('MonitoredRooms', '[]');
 
-        // -------------------- NEU (Änderung 1) --------------------
+        // -------------------- NEU --------------------
 
         // Exploration / Epsilon
         $this->RegisterPropertyFloat('EpsilonStart', 0.40);
@@ -77,8 +77,8 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterAttributeString('QTable', '{}');            // Fallback, wenn kein Dateipfad
         $this->RegisterAttributeString('LastAction', '0:0');
 
-        // Timer
-        $this->RegisterTimer('LearningTimer', 0, 'ADHVAC_ProcessLearning($_IPS[\'TARGET\']);');
+        // Timer -> **use module prefix wrapper** (module.json likely has "prefix":"ACIPS")
+        $this->RegisterTimer('LearningTimer', 0, 'ACIPS_ProcessLearning($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
@@ -88,66 +88,46 @@ class adaptive_HVAC_control extends IPSModule
         $ok = true;
         $this->SetStatus($ok ? 102 : 202);
 
-        // Timer aktivieren (kein orchestrated-Stop hier, damit rückwärtskompatibel)
         $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
         $this->SetTimerInterval('LearningTimer', $intervalMs);
 
-        // Initial Epsilon, falls 0
         if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
-            $this->initExploration(); // Änderung 3
+            $this->initExploration();
         }
 
         $this->log(2, 'apply_changes', ['interval_ms'=>$intervalMs]);
     }
 
-    // -------------------- Public Timer-Entry --------------------
-
-    public function ADHVAC_ProcessLearning()
-    {
-        $this->ProcessLearning();
-    }
+    // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
 
     public function ProcessLearning(): void
     {
-        // Abbruch, wenn manuell
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->log(2, 'manual_override_active');
             return;
         }
-        // AC aktiv?
         if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
             $this->log(3, 'ac_inactive_skip');
             return;
         }
 
-        // Coil-Schutz (Änderung 2)
         if (!$this->coilProtectionOk()) {
             $this->applyAction(0, 0);
             return;
         }
 
-        // STATE aufbauen
-        $state = $this->buildStateVector(); // inkl. optionaler ZDM-Aggregate (Änderung 4)
+        $state = $this->buildStateVector();
 
-        // Aktion wählen (epsilon-greedy)
         [$p, $f] = $this->selectActionEpsilonGreedy($state);
-
-        // Delta-Limits beachten
         [$p, $f] = $this->limitDeltas($p, $f);
 
-        // Anwenden
         $this->applyAction($p, $f);
 
-        // Reward berechnen
         $reward = $this->calculateReward($state, ['p'=>$p, 'f'=>$f]);
 
-        // Q-Update
         $this->qlearnUpdate($state, $p, $f, $reward, /*explore=*/true);
 
-        // Epsilon annealen (Änderung 3)
         $this->annealEpsilon();
-
-        // Persistenz (Änderung 5)
         $this->persistQTableIfNeeded();
     }
 
@@ -156,10 +136,10 @@ class adaptive_HVAC_control extends IPSModule
     /**
      * Forciert eine Aktion "P:F" (z. B. "55:70") und lernt aus dem Outcome.
      * Exploration ist in diesem Pfad **aus**.
+     * Global wrapper is ACIPS_ForceActionAndLearn($InstanceID, $pair)
      */
-    public function ACIPS_ForceActionAndLearn(string $pair): string
+    public function ForceActionAndLearn(string $pair): string
     {
-        // Coil-Schutz
         if (!$this->coilProtectionOk()) {
             $this->applyAction(0, 0);
             return json_encode(['ok'=>false,'err'=>'coil_protection']);
@@ -178,7 +158,6 @@ class adaptive_HVAC_control extends IPSModule
         $state  = $this->buildStateVector();
         $reward = $this->calculateReward($state, ['p'=>$p, 'f'=>$f]);
 
-        // Q-Update ohne Exploration
         $this->qlearnUpdate($state, $p, $f, $reward, /*explore=*/false);
         $this->WriteAttributeString('LastAction', $p.':'.$f);
         $this->persistQTableIfNeeded();
@@ -195,14 +174,12 @@ class adaptive_HVAC_control extends IPSModule
 
         $eps = (float)$this->ReadAttributeFloat('Epsilon');
         if (mt_rand() / mt_getrandmax() < $eps) {
-            // Explore: zufällige erlaubte Aktion
             $key = array_rand($pairs);
             [$p, $f] = array_map('intval', explode(':', $key));
             $this->log(3, 'select_explore', ['pair'=>$key,'epsilon'=>$eps]);
             return [$p, $f];
         }
 
-        // Exploit: bestes Q
         $bestKey = $this->bestActionForState($state, array_keys($pairs));
         [$p, $f] = array_map('intval', explode(':', $bestKey));
         $this->log(3, 'select_exploit', ['pair'=>$bestKey,'epsilon'=>$eps]);
@@ -222,9 +199,8 @@ class adaptive_HVAC_control extends IPSModule
         if (!isset($q[$sKey])) $q[$sKey] = [];
         if (!isset($q[$sKey][$aKey])) $q[$sKey][$aKey] = 0.0;
 
-        // Nächster State (vereinfachend: gleich dem aktuellen; falls du nextState hast, hier einsetzen)
         $maxNext = 0.0;
-        foreach ($q[$sKey] as $ak => $val) {
+        foreach ($q[$sKey] as $val) {
             if ($val > $maxNext) $maxNext = $val;
         }
 
@@ -261,7 +237,7 @@ class adaptive_HVAC_control extends IPSModule
             $anyWindow = $anyWindow || $win;
         }
 
-        // ZDM Aggregates (Änderung 4)
+        // ZDM Aggregates
         $agg = $this->fetchZDMAggregates();
         if ($agg) {
             $numActive = max($numActive, (int)($agg['numActiveRooms'] ?? 0));
@@ -269,7 +245,7 @@ class adaptive_HVAC_control extends IPSModule
             $anyWindow = $anyWindow || !empty($agg['anyWindowOpen']);
         }
 
-        // Coil Temp (falls vorhanden)
+        // Coil Temp
         $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
 
         return [
@@ -282,15 +258,10 @@ class adaptive_HVAC_control extends IPSModule
 
     private function calculateReward(array $state, array $action): float
     {
-        // Beispielhaft:
-        // - Nähe an 0 (maxDelta -> 0) positiv
-        // - Hohe Leistung/Lüfter leicht negativ (Energie)
-        // - Fenster offen negativ
-        $comfort = -($state['maxDelta'] ?? 0.0);               // je kleiner desto besser
+        $comfort = -($state['maxDelta'] ?? 0.0);
         $energy  = -0.01 * (($action['p'] ?? 0) + ($action['f'] ?? 0));
         $window  = -0.5 * (int)($state['anyWindowOpen'] ?? 0);
 
-        // Anti-Flapping
         $penalty = 0.0;
         if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
             $dp = abs(((int)$m[1]) - ($action['p'] ?? 0));
@@ -302,7 +273,7 @@ class adaptive_HVAC_control extends IPSModule
         return (float)round($reward, 4);
     }
 
-    // -------------------- Coil / Safety (Änderung 2) --------------------
+    // -------------------- Coil / Safety --------------------
 
     private function coilProtectionOk(): bool
     {
@@ -321,7 +292,6 @@ class adaptive_HVAC_control extends IPSModule
             return false;
         }
 
-        // Abfallrate (K/min) (einfacher Prädiktor)
         $now  = time();
         $key  = 'coil_last';
         $last = $this->GetBuffer($key);
@@ -341,7 +311,7 @@ class adaptive_HVAC_control extends IPSModule
         return true;
     }
 
-    // -------------------- Epsilon (Änderung 3) --------------------
+    // -------------------- Epsilon --------------------
 
     private function initExploration(): void
     {
@@ -360,7 +330,7 @@ class adaptive_HVAC_control extends IPSModule
         $this->log(3, 'epsilon_anneal', ['eps'=>$eps]);
     }
 
-    // -------------------- ZDM Aggregates (Änderung 4) --------------------
+    // -------------------- ZDM Aggregates --------------------
 
     private function fetchZDMAggregates(): ?array
     {
@@ -376,7 +346,7 @@ class adaptive_HVAC_control extends IPSModule
         }
     }
 
-    // -------------------- Q-Table Persistenz (Änderung 5) --------------------
+    // -------------------- Q-Table Persistenz --------------------
 
     private function persistQTableIfNeeded(): void
     {
@@ -398,7 +368,6 @@ class adaptive_HVAC_control extends IPSModule
 
     private function storeQTable(array $q): void
     {
-        // Cache in Attribut (für UI), finaler Save in persistQTableIfNeeded()
         $this->WriteAttributeString('QTable', json_encode($q, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 
@@ -406,7 +375,6 @@ class adaptive_HVAC_control extends IPSModule
     {
         $path = trim($this->ReadPropertyString('QTablePath'));
         if ($path === '') {
-            // Attribut als Fallback
             $this->WriteAttributeString('QTable', $json);
             return;
         }
@@ -452,10 +420,10 @@ class adaptive_HVAC_control extends IPSModule
         if ($varID <= 0 || !IPS_VariableExists($varID)) return;
         $vt = IPS_GetVariable($varID)['VariableType'] ?? -1;
         switch ($vt) {
-            case 0: @RequestAction($varID, $val >= 1); break; // bool → on/off
-            case 1: @RequestAction($varID, (int)$val); break; // int
-            case 2: @RequestAction($varID, (float)$val); break; // float
-            case 3: @RequestAction($varID, (string)$val); break; // string
+            case 0: @RequestAction($varID, $val >= 1); break;     // bool → on/off
+            case 1: @RequestAction($varID, (int)$val); break;      // int
+            case 2: @RequestAction($varID, (float)$val); break;    // float
+            case 3: @RequestAction($varID, (string)$val); break;   // string
             default: @SetValue($varID, $val); break;
         }
     }
@@ -464,7 +432,6 @@ class adaptive_HVAC_control extends IPSModule
 
     private function getAllowedActionPairs(): array
     {
-        // Aus Custom-Listen bauen (Fallback auf gleichmäßige Steps)
         $powers = $this->parseIntList($this->ReadPropertyString('CustomPowerLevels'), 0, 100, $this->ReadPropertyInteger('PowerStep'));
         $fans   = $this->parseIntList($this->ReadPropertyString('CustomFanSpeeds'),   0, 100, $this->ReadPropertyInteger('FanStep'));
 
@@ -489,7 +456,6 @@ class adaptive_HVAC_control extends IPSModule
         $key = $p.':'.$f;
         if (isset($allowed[$key])) return [$p, $f];
 
-        // Nächstliegende erlaubte Aktion
         $best = $this->nearestAction($p, $f, array_keys($allowed));
         [$p, $f] = array_map('intval', explode(':', $best));
         $this->log(1, 'action_adjusted_to_allowed', ['req'=>$key,'adj'=>$best]);
@@ -526,7 +492,6 @@ class adaptive_HVAC_control extends IPSModule
 
     private function stateKey(array $s): string
     {
-        // einfache Serialisierung; für mehr Stabilität ggf. binning/rounding nutzen
         return md5(json_encode($s));
     }
 
@@ -541,7 +506,6 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
         if (empty($out)) {
-            // fallback auf Schritte
             for ($v = $min; $v <= $max; $v += max(1, (int)$fallbackStep)) $out[$v] = true;
         }
         ksort($out, SORT_NUMERIC);
@@ -557,8 +521,7 @@ class adaptive_HVAC_control extends IPSModule
 
     private function roomWindowOpen(array $room): bool
     {
-        // Wenn du Fenster pro Raum hast, hier anschließen; sonst false
-        // (Fensterlogik liegt im ZDM; hier nur Platzhalter)
+        // Fensterlogik liegt im ZDM; hier nur Platzhalter
         return false;
     }
 
@@ -579,7 +542,7 @@ class adaptive_HVAC_control extends IPSModule
         return false;
     }
 
-    // -------------------- Logging (Änderung 6) --------------------
+    // -------------------- Logging --------------------
 
     /**
      * $lvl: 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG
@@ -599,8 +562,7 @@ class adaptive_HVAC_control extends IPSModule
         elseif ($lvl === 1) $prio = KL_WARNING;
 
         $this->LogMessage("ADHVAC ".$line, $prio);
-        // Optional zusätzlich:
+        // Optional:
         // $this->SendDebug('ADHVAC', $line, 0);
     }
 }
-
