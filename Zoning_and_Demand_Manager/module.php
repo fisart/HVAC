@@ -49,6 +49,12 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyString('ControlledRooms', '[]');
         $this->RegisterPropertyBoolean('OverrideMode', false);
         $this->RegisterTimer('ProcessZoning', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
+        $this->RegisterPropertyInteger('WindowDebounceSec', 10);   // 0..120
+        $this->RegisterPropertyInteger('LogLevel', 2);             // 0=ERROR,1=WARN,2=INFO,3=DEBUG
+        
+        // Attribute für Debounce & Aggregates
+        $this->RegisterAttributeString('WindowStable', '{}');      // {roomName:{open:bool, ts:int}}
+        $this->RegisterAttributeString('LastAggregates', '{}');    // Cache/Debug
     }
 
     public function ApplyChanges()
@@ -236,6 +242,40 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($phaseID > 0 && IPS_VariableExists($phaseID) && GetValueInteger($phaseID) != $state) {
             SetValueInteger($phaseID, $state);
         }
+    }
+    // ===== Reentranzschutz =====
+    private function guardEnter(): bool {
+        $key = 'ZDM_' . $this->InstanceID;
+        return IPS_SemaphoreEnter($key, 1000);
+    }
+    private function guardLeave(): void {
+        IPS_SemaphoreLeave('ZDM_' . $this->InstanceID);
+    }
+    
+    // ===== Logging kompakt & strukturiert =====
+    private function log(int $lvl, string $event, array $data = []): void {
+        $cfg = (int)$this->ReadPropertyInteger('LogLevel');
+        if ($lvl > $cfg) return;
+        $line = json_encode(['t'=>time(),'lvl'=>$lvl,'ev'=>$event,'data'=>$data],
+            JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+        $prio = KL_MESSAGE; if ($lvl === 0) $prio = KL_ERROR; elseif ($lvl === 1) $prio = KL_WARNING;
+        $this->SendDebug('ZDM', $line, 0);
+        $this->LogMessage("ZDM ".$line, $prio);
+    }
+    
+    // ===== JSON Attribute Helpers =====
+    private function getWindowStableMap(): array {
+        return json_decode($this->ReadAttributeString('WindowStable'), true) ?: [];
+    }
+    private function setWindowStableMap(array $m): void {
+        $this->WriteAttributeString('WindowStable', json_encode($m));
+    }
+    
+    // ===== Sensor Helpers =====
+    private function GetFloat(int $varID): float {
+        if ($varID <= 0) return NAN;
+        $v = @GetValue($varID);
+        return is_numeric($v) ? (float)$v : NAN;
     }
 
     private function ImplementFinalMeasures(bool $isAnyRoomDemandingCooling) {
