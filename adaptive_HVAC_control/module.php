@@ -396,16 +396,26 @@ class adaptive_HVAC_control extends IPSModule
     private function fetchZDMAggregates(): ?array
     {
         $iid = (int)$this->ReadPropertyInteger('ZDM_InstanceID');
-        if ($iid <= 0 || !IPS_InstanceExists($iid)) return null;
+        if ($iid <= 0 || !IPS_InstanceExists($iid)) {
+            return null; // ZDM nicht verknüpft
+        }
+    
+        // Funktion existiert nicht → ZDM-Modul nicht geladen/registriert
+        if (!function_exists('ZDM_GetAggregates')) {
+            $this->log(1, 'zdm_agg_err', ['msg' => 'ZDM_GetAggregates() not available']);
+            return null;
+        }
+    
         try {
             $json = @ZDM_GetAggregates($iid);
             $arr  = json_decode((string)$json, true);
             return is_array($arr) ? $arr : null;
         } catch (\Throwable $e) {
-            $this->log(1, 'zdm_agg_err', ['msg'=>$e->getMessage()]);
+            $this->log(1, 'zdm_agg_err', ['msg' => $e->getMessage()]);
             return null;
         }
     }
+
 
     // -------------------- Q-Table Persistenz --------------------
 
