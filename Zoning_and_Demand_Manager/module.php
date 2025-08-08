@@ -94,6 +94,15 @@ class Zoning_and_Demand_Manager extends IPSModule
             'byName' => $byName
         ]);
     }
+
+    // Public API for Orchestrator (global: ZDM_GetRoomConfigurations)
+    public function GetRoomConfigurations(): string
+    {
+        // return a FLAT array of rooms (what Orchestrator expects)
+        $rooms = $this->getRooms();
+        return json_encode(is_array($rooms) ? $rooms : []);
+    }
+
     public function ZDM_ProcessZoning()
     {
         $this->ProcessZoning();
