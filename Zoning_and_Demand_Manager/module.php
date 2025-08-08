@@ -76,25 +76,6 @@ class Zoning_and_Demand_Manager extends IPSModule
         ]);
     }
 
-    // ---------- Public (Timer) ----------
-    public function GetRoomConfigurations(): string
-    {
-        // Base list from ControlledRooms
-        $rooms = $this->getRooms();
-    
-        // Also provide a name->room map (handy for lookups)
-        $byName = [];
-        foreach ($rooms as $r) {
-            $n = (string)($r['name'] ?? '');
-            if ($n !== '') $byName[$n] = $r;
-        }
-    
-        return json_encode([
-            'rooms'  => $rooms,
-            'byName' => $byName
-        ]);
-    }
-
     // Public API for Orchestrator (global: ZDM_GetRoomConfigurations)
     public function GetRoomConfigurations(): string
     {
