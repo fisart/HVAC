@@ -136,7 +136,30 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
+    public function SetMode(int $mode): void
+    {
+        // clamp to 0..2 (Cooling/Heating/Auto)
+        if ($mode < 0) $mode = 0;
+        if ($mode > 2) $mode = 2;
+    
+        // persist to property so it survives restarts
+        IPS_SetProperty($this->InstanceID, 'OperatingMode', $mode);
+        @IPS_ApplyChanges($this->InstanceID);
+    
+        $this->log(2, 'set_mode', ['mode' => $mode]);
+    }
+    
+    public function GetMode(): int
+    {
+        return (int)$this->ReadPropertyInteger('OperatingMode');
+    }
 
+    public function CommandSystem(int $powerPercent, int $fanPercent): void
+    {
+        $powerPercent = max(0, min(100, $powerPercent));
+        $fanPercent   = max(0, min(100, $fanPercent));
+        $this->applyAction($powerPercent, $fanPercent);
+    }
     public function ProcessLearning(): void
     {
         if ($this->ReadPropertyBoolean('ManualOverride')) {
