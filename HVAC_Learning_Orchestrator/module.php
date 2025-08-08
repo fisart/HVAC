@@ -192,6 +192,12 @@ class HVAC_Learning_Orchestrator extends IPSModule
             // WICHTIG: 2. Argument ist Pflicht → neutraler Output "0:0"
             $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn("0:0") requested', KL_MESSAGE);
             ACIPS_ForceActionAndLearn($adaptiveID, '0:0');
+            // ZDM hart auf 0:0 setzen (unabhängig von Min-Grenzen im Adaptive-Modul)
+            if ($zoningID > 0 && function_exists('ZDM_CommandSystem')) {
+                $this->LogMessage('ORCH: Forcing ZDM system output to 0:0', KL_MESSAGE);
+                ZDM_CommandSystem($zoningID, 0, 0);
+            }
+
         } else {
             $this->LogMessage('ORCH StopCalibration: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
         }
