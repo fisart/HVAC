@@ -165,7 +165,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             }
 
             // Aggregates berechnen (optional für Adaptive-Modul)
-            $this->ZDM_GetAggregates();
+            $this->GetAggregates();
 
         } finally {
             $this->guardLeave();
