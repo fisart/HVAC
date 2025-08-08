@@ -97,88 +97,126 @@ class HVAC_Learning_Orchestrator extends IPSModule
     }
 
     public function StartCalibration()
-    {
-        $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
-        $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
-        if ($zoningID === 0 || $adaptiveID === 0) {
-            $this->LogMessage('ORCH StartCalibration: missing links (status remains 202)', KL_ERROR);
-            return;
-        }
+{
+    $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
+    $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
 
-        $this->WriteAttributeString('CalibrationStatus', 'Running');
-        $this->SetStatus(102); // keep green during run
-        $this->LogMessage('--- ORCH: Starting System Calibration ---', KL_MESSAGE);
+    $this->LogMessage("ORCH: StartCalibration triggered. ZDM={$zoningID}, ADAPT={$adaptiveID}", KL_MESSAGE);
 
+    if ($zoningID === 0 || $adaptiveID === 0) {
+        $this->LogMessage("ORCH: Missing links – cannot start calibration (ZDM/ADAPT is 0).", KL_ERROR);
+        return;
+    }
+
+    // Status setzen
+    $this->WriteAttributeString('CalibrationStatus', 'Running');
+    $this->SetStatus(102);
+    $this->LogMessage('--- ORCH: Starting System Calibration ---', KL_MESSAGE);
+
+    // Originalziele sichern (falls vorhanden)
+    if (method_exists($this, 'saveOriginalTargets')) {
         $this->saveOriginalTargets();
+    }
 
-        // Defensive: check APIs before calling
-        if (function_exists('ACIPS_SetMode')) {
-            ACIPS_SetMode($adaptiveID, 'orchestrated');
-        } else {
-            $this->LogMessage('ORCH StartCalibration: ACIPS_SetMode() not available', KL_ERROR);
-        }
-        if (function_exists('ACIPS_ResetLearning')) {
-            ACIPS_ResetLearning($adaptiveID);
-        } else {
-            $this->LogMessage('ORCH StartCalibration: ACIPS_ResetLearning() not available', KL_ERROR);
-        }
-        if (function_exists('ZDM_SetOverrideMode')) {
-            ZDM_SetOverrideMode($zoningID, true);
-        } else {
-            $this->LogMessage('ORCH StartCalibration: ZDM_SetOverrideMode() not available', KL_ERROR);
-        }
-        if (function_exists('ZDM_CommandSystem')) {
-            ZDM_CommandSystem($zoningID, 100, 100);
-        } else {
-            $this->LogMessage('ORCH StartCalibration: ZDM_CommandSystem() not available', KL_ERROR);
-        }
+    // ZDM Override einschalten
+    if (function_exists('ZDM_SetOverrideMode')) {
+        $this->LogMessage("ORCH: Sending Override=true to ZDM instance {$zoningID}", KL_MESSAGE);
+        ZDM_SetOverrideMode($zoningID, true);
 
+        // Verifikation: OverrideActive in der ZDM-Instanz prüfen
+        $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
+        if ($vid) {
+            $val = (bool) @GetValue($vid);
+            $this->LogMessage('ORCH: ZDM OverrideActive after StartCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
+        } else {
+            $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StartCalibration)', KL_WARNING);
+        }
+    } else {
+        $this->LogMessage('ORCH: ZDM_SetOverrideMode() not available', KL_ERROR);
+    }
+
+    // Adaptive-Modus (optional, falls API vorhanden)
+    if (function_exists('ACIPS_SetMode')) {
+        ACIPS_SetMode($adaptiveID, 'orchestrated');
+        $this->LogMessage('ORCH: ACIPS_SetMode(orchestrated) requested', KL_MESSAGE);
+    } else {
+        $this->LogMessage('ORCH: ACIPS_SetMode() not available', KL_WARNING);
+    }
+
+    // Hier deine bestehende Startlogik weiterlaufen lassen (Plan generieren, Timer/Step starten, etc.)
+    if (method_exists($this, 'ProposePlan')) {
+        // optional/sofern gewünscht: Plan neu erzeugen
+        // $this->ProposePlan();
+    }
+    if (method_exists($this, 'RunNextStep')) {
         $this->RunNextStep();
-        $this->SetTimerInterval('CalibrationTimer', 120 * 1000);
-        $this->LogMessage('ORCH: CalibrationTimer set to 120s', KL_MESSAGE);
     }
 
-    public function StopCalibration()
-    {
-        $this->LogMessage('--- ORCH: Calibration Stopped ---', KL_MESSAGE);
-        $this->SetTimerInterval('CalibrationTimer', 0);
+    // UI aktualisieren
+    if (method_exists($this, 'ReloadForm')) {
+        $this->ReloadForm();
+    }
+}
 
+   public function StopCalibration()
+{
+    $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
+    $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
+
+    $this->LogMessage("ORCH: StopCalibration triggered. ZDM={$zoningID}, ADAPT={$adaptiveID}", KL_MESSAGE);
+
+    // ZDM Override ausschalten
+    if ($zoningID > 0 && function_exists('ZDM_SetOverrideMode')) {
+        $this->LogMessage("ORCH: Sending Override=false to ZDM instance {$zoningID}", KL_MESSAGE);
+        ZDM_SetOverrideMode($zoningID, false);
+
+        // Verifikation: OverrideActive in der ZDM-Instanz prüfen
+        $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
+        if ($vid) {
+            $val = (bool) @GetValue($vid);
+            $this->LogMessage('ORCH: ZDM OverrideActive after StopCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
+        } else {
+            $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StopCalibration)', KL_WARNING);
+        }
+    } else {
+        if ($zoningID === 0) {
+            $this->LogMessage("ORCH: No ZDM instance linked – cannot set Override=false", KL_WARNING);
+        } else {
+            $this->LogMessage('ORCH: ZDM_SetOverrideMode() not available', KL_ERROR);
+        }
+    }
+
+    // Adaptive zurück auf kooperativ + optional einmaliges "Lernen" auslösen
+    if ($adaptiveID > 0) {
+        if (function_exists('ACIPS_ForceActionAndLearn')) {
+            ACIPS_ForceActionAndLearn($adaptiveID);
+            $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn() requested', KL_MESSAGE);
+        } else {
+            $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
+        }
+        if (function_exists('ACIPS_SetMode')) {
+            ACIPS_SetMode($adaptiveID, 'cooperative');
+            $this->LogMessage('ORCH: ACIPS_SetMode(cooperative) requested', KL_MESSAGE);
+        } else {
+            $this->LogMessage('ORCH: ACIPS_SetMode() not available', KL_ERROR);
+        }
+    }
+
+    // Originalziele wiederherstellen (falls vorhanden)
+    if (method_exists($this, 'restoreOriginalTargets')) {
         $this->restoreOriginalTargets();
-
-        $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
-        $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
-
-        if ($zoningID > 0) {
-            if (function_exists('ZDM_CommandSystem')) {
-                ZDM_CommandSystem($zoningID, 0, 0);
-            } else {
-                $this->LogMessage('ORCH StopCalibration: ZDM_CommandSystem() not available', KL_ERROR);
-            }
-            if (function_exists('ZDM_SetOverrideMode')) {
-                ZDM_SetOverrideMode($zoningID, false);
-            } else {
-                $this->LogMessage('ORCH StopCalibration: ZDM_SetOverrideMode() not available', KL_ERROR);
-            }
-        }
-
-        if ($adaptiveID > 0) {
-            if (function_exists('ACIPS_ForceActionAndLearn')) {
-                ACIPS_ForceActionAndLearn($adaptiveID, '0:0'); // hard stop outputs
-            } else {
-                $this->LogMessage('ORCH StopCalibration: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
-            }
-            if (function_exists('ACIPS_SetMode')) {
-                ACIPS_SetMode($adaptiveID, 'cooperative');
-            } else {
-                $this->LogMessage('ORCH StopCalibration: ACIPS_SetMode() not available', KL_ERROR);
-            }
-        }
-
-        $this->WriteAttributeString('CalibrationStatus', 'Done');
-        $this->SetStatus(102); // keep green when done
-        $this->LogMessage('ORCH status=102 (calibration done)', KL_MESSAGE);
-        $this->ReloadForm(); // show updated state in form immediately
     }
+
+    // Status / UI
+    $this->WriteAttributeString('CalibrationStatus', 'Done');
+    $this->SetStatus(102);
+    $this->LogMessage('ORCH: Calibration finished (status=Done).', KL_MESSAGE);
+
+    if (method_exists($this, 'ReloadForm')) {
+        $this->ReloadForm();
+    }
+}
+
 
     public function RunNextStep()
     {
