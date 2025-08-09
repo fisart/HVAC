@@ -327,7 +327,6 @@ class Zoning_and_Demand_Manager extends IPSModule
         // Kalibrierungsmodus erkennen: Override aktiv + Orchestrator-Flap-Map vorhanden
         $override = GetValue($this->GetIDForIdent('OverrideActive'));
         $flapMap  = json_decode($this->ReadAttributeString('LastOrchestratorFlaps') ?: '[]', true);
-        
         $calibMode = ($override && is_array($flapMap) && !empty($flapMap));
 
         foreach ($rooms as $r) {
@@ -338,11 +337,12 @@ class Zoning_and_Demand_Manager extends IPSModule
             $anyWindow = $anyWindow || $win;
             $effectiveDemand = false;
 
+            $effectiveDemand = false;
+
             if ($calibMode) {
-                // Im Kalibrierungsmodus zählen offene Klappen (laut Plan) als "Bedarf"
                 $nameStr = (string)($r['name'] ?? '');
                 if ($nameStr !== '' && array_key_exists($nameStr, $flapMap)) {
-                    $effectiveDemand = (bool)$flapMap[$nameStr]; // true = Klappe offen
+                    $effectiveDemand = (bool)$flapMap[$nameStr]; // Plan: Klappe offen => aktiv
                 }
             } else {
                 // --- bestehende Logik unverändert: Bedarfsausgabe 2/3, sonst ΔT-Fallback ---
