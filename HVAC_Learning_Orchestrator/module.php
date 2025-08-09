@@ -110,18 +110,12 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     // Status setzen
     $this->WriteAttributeString('CalibrationStatus', 'Running');
-    // Timer für die Schrittfolge aktivieren (Default 60s) und Indizes resetten
-    $zdmID = (int)$this->ReadPropertyInteger('ZoningManagerID');
-    $zdmIntervalSec = (int)IPS_GetProperty($zdmID, 'TimerInterval'); // Sekundenwert aus ZDM
-    IPS_SetTimerInterval(
-        $this->GetIDForIdent('CalibrationTimer'),
-        max(1000, $zdmIntervalSec * 1000) // in ms, min. 1s
-    );
-
-    $this->WriteAttributeInteger('CurrentStageIndex', 0);
-    $this->WriteAttributeInteger('CurrentActionIndex', 0);
-
-    $this->SetStatus(102);
+    // Timer für die Schrittfolge aktivieren (Default 60s)
+$interval = 60000; // ms
+$this->SetTimerInterval('CalibrationTimer', $interval);
+$this->WriteAttributeInteger('CurrentStageIndex', 0);
+$this->WriteAttributeInteger('CurrentActionIndex', 0);
+$this->SetStatus(102);
     $this->LogMessage('--- ORCH: Starting System Calibration ---', KL_MESSAGE);
 
     // Originalziele sichern (falls vorhanden)
@@ -174,10 +168,14 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
    public function StopCalibration()
 {
-    $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
+    // Timer sicher ausschalten
+$this->SetTimerInterval('CalibrationTimer', 0);
+$zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
     $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
 
-    $this->LogMessage("ORCH: StopCalibration triggered. ZDM={$zoningID}, ADAPT={$adaptiveID}", KL_MESSAGE);
+    \1    // Ensure timer is off while stopping
+    $this->SetTimerInterval('CalibrationTimer', 0);
+
 
     // 1) Override im ZDM ausschalten
     if ($zoningID > 0) {
@@ -313,7 +311,15 @@ class HVAC_Learning_Orchestrator extends IPSModule
         } else {
             $this->WriteAttributeInteger('CurrentActionIndex', $actionIdx);
         }
-    }
+    
+    // Nächstes Timerintervall setzen (Stage-Override möglich)
+    $stageInterval = (int)($currentStage['interval_ms'] ?? 60000);
+    $this->SetTimerInterval('CalibrationTimer', max(1000, $stageInterval));
+
+// Set next timer interval (per-stage override via 'interval_ms', else 60s)
+$nextInterval = (int)($currentStage['interval_ms'] ?? 60000);
+$this->SetTimerInterval('CalibrationTimer', max(1000, $nextInterval));
+}
 
     // ===== Plan helpers =====
 
