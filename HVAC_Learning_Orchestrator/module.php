@@ -121,8 +121,10 @@ class HVAC_Learning_Orchestrator extends IPSModule
     // ZDM Override einschalten
     if (function_exists('ZDM_SetOverrideMode')) {
         $this->LogMessage("ORCH: Sending Override=true to ZDM instance {$zoningID}", KL_MESSAGE);
-        $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($bool ? 'true' : 'false'), KL_MESSAGE);
-        ZDM_SetOverrideMode($zoningID, true);
+        // before calling ZDM_SetOverrideMode(...)
+        $overrideValue = true;
+        $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($overrideValue ? 'true' : 'false'), KL_MESSAGE);
+        ZDM_SetOverrideMode($zoningID, $overrideValue);
 
         // Verifikation: OverrideActive in der ZDM-Instanz prüfen
         $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
@@ -170,8 +172,10 @@ class HVAC_Learning_Orchestrator extends IPSModule
     if ($zoningID > 0) {
         if (function_exists('ZDM_SetOverrideMode')) {
             $this->LogMessage("ORCH: Sending Override=false to ZDM instance {$zoningID}", KL_MESSAGE);
-            $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($bool ? 'true' : 'false'), KL_MESSAGE);
-            ZDM_SetOverrideMode($zoningID, false);
+            // before calling ZDM_SetOverrideMode(...)
+            $overrideValue = false;
+            $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($overrideValue ? 'true' : 'false'), KL_MESSAGE);
+            ZDM_SetOverrideMode($zoningID, $overrideValue);
 
             // Verifikation: OverrideActive in der ZDM-Instanz prüfen
             $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
