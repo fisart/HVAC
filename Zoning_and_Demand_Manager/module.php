@@ -321,6 +321,10 @@ class Zoning_and_Demand_Manager extends IPSModule
         $activeRooms = [];
 
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
+        // Kalibrierungsmodus erkennen: Override aktiv + Orchestrator-Flap-Map vorhanden
+        $override = GetValue($this->GetIDForIdent('OverrideActive'));
+        $flapMap  = json_decode($this->ReadAttributeString('LastOrchestratorFlaps') ?: '[]', true);
+        $calibMode = ($override && is_array($flapMap) && !empty($flapMap));
 
         foreach ($rooms as $r) {
             $name = (string)($r['name'] ?? 'room');
@@ -328,6 +332,33 @@ class Zoning_and_Demand_Manager extends IPSModule
             $soll = $this->GetFloat((int)($r['targetID'] ?? 0));
             $win  = $this->isWindowOpenStable($r);
             $anyWindow = $anyWindow || $win;
+            $effectiveDemand = false;
+
+            if ($calibMode) {
+                // Im Kalibrierungsmodus zählen offene Klappen (laut Plan) als "Bedarf"
+                $nameStr = (string)($r['name'] ?? '');
+                if ($nameStr !== '' && array_key_exists($nameStr, $flapMap)) {
+                    $effectiveDemand = (bool)$flapMap[$nameStr]; // true = Klappe offen
+                }
+            } else {
+                // --- bestehende Logik unverändert: Bedarfsausgabe 2/3, sonst ΔT-Fallback ---
+                $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
+                $hasDemandVar = ($demVarID > 0 && IPS_VariableExists($demVarID));
+                if ($hasDemandVar) {
+                    $dem = (int)@GetValue($demVarID);
+                    $effectiveDemand = ($dem === 2 || $dem === 3);
+                } else {
+                    if (is_finite($ist) && is_finite($soll)) {
+                        $effectiveDemand = (($ist - $soll) > $hyst);
+                    }
+                }
+            }
+
+            // Fenster-offen blockiert immer (bleibt unverändert)
+            if ($win) {
+                $effectiveDemand = false;
+            }
+           
             // Override: offene Klappe als aktiver Bedarf werten
             $effectiveDemand = false;
             $override = GetValue($this->GetIDForIdent('OverrideActive'));
