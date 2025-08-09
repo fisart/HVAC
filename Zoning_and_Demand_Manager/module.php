@@ -98,6 +98,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         try {
             // Override aktiv? Dann keine Autologik
             $override = GetValue($this->GetIDForIdent('OverrideActive'));
+            $this->log(2, 'DEBUG_OVERRIDE_CHECK', ['override_value' => (bool)$override]);
             if ($override) {
                 $this->log(2, 'override_active_skip_cycle');
                 return;
@@ -179,14 +180,31 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     public function SetOverrideMode(bool $on): void
     {
-        if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
-        try {
-            SetValue($this->GetIDForIdent('OverrideActive'), $on);
-            $this->ReloadForm();
-            $this->log(2, 'override_set', ['on' => $on]);
+        // Trace caller + requested value
+        $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1]['function'] ?? 'unknown';
+        $this->log(2, 'DEBUG_OVERRIDE_SET_CALL', ['caller' => $caller, 'on' => $on]);
 
+        if (!$this->guardEnter()) { 
+            $this->log(1, 'guard_timeout'); 
+            return; 
+        }
+        try {
+            // Before/after variable verification
+            $vid = $this->GetIDForIdent('OverrideActive');
+            $old = GetValue($vid);
+            $this->log(2, 'DEBUG_BEFORE_SET', ['old_value' => (bool)$old]);
+
+            SetValue($vid, $on);
+
+            $new = GetValue($vid);
+            $this->log(2, 'DEBUG_AFTER_SET', ['new_value' => (bool)$new]);
+
+            // UI + standard log
+            $this->ReloadForm();
+            $this->log(2, 'override_set', ['on' => (bool)$on]);
+
+            // Safety neutralization when enabling override
             if ($on) {
-                // Im Zweifel alles neutralisieren:
                 $this->systemOff();
                 $this->applyAllFlaps(false);
             }
@@ -194,6 +212,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->guardLeave();
         }
     }
+
 
     /**
      * Orchestrator kommandiert Klappen explizit: ["Living Room"=>true, "Kitchen"=>false, ...]
