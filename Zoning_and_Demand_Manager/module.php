@@ -141,23 +141,25 @@ class Zoning_and_Demand_Manager extends IPSModule
                 // 2) Bedarfsausgabe (Integer-Link in der Raumkonfiguration)
                 //    unterstützte Keys: demandID | bedarfID | bedarfsausgabeID
                 // 2) Bedarfsausgabe (Integer-Link in der Raumkonfiguration)
+                // 2) Bedarfsausgabe (Integer-Link in der Raumkonfiguration)
                 $demVarID = (int)($room['demandID'] ?? $room['bedarfID'] ?? $room['bedarfsausgabeID'] ?? 0);
 
                 if ($demVarID > 0 && IPS_VariableExists($demVarID)) {
                     $dem = (int)@GetValue($demVarID);
 
-                    // STRIKT: Nur 1/2 = auf, alles andere (inkl. 0/3/…) = zu
-                    if ($dem === 1 || $dem === 2) {
+                    if ($dem === 2 || $dem === 3) {
+                        // Bedarf -> Klappe AUF
                         $this->setFlap($room, true);
                         $anyDemand = true;
                         $this->log(2, 'room_demand_flag_on_flap_open', ['room'=>$name, 'dem'=>$dem]);
                     } else {
+                        // dem=0 oder 1 -> kein Bedarf -> Klappe ZU
                         $this->setFlap($room, false);
                         $this->log(2, 'room_demand_flag_off_flap_closed', ['room'=>$name, 'dem'=>$dem]);
                     }
-                    continue; // KEIN ΔT-Fallback, wenn Bedarfsausgabe vorhanden ist
+                    continue; // kein ΔT-Fallback wenn Bedarfs-Var vorhanden
                 } else {
-                    // keine Bedarf-Variable konfiguriert -> ΔT-Fallback
+                    // keine Bedarf-Variable konfiguriert -> ΔT/Hysterese-Fallback
                     $this->log(3, 'room_no_demand_var_fallback_delta', ['room'=>$name]);
                 }
 
@@ -327,11 +329,10 @@ class Zoning_and_Demand_Manager extends IPSModule
             // effektiver Bedarf: erst Bedarfsausgabe (1/2), sonst ΔT-Fallback
             $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
             $hasDemandVar = ($demVarID > 0 && IPS_VariableExists($demVarID));
-            $effectiveDemand = false;
 
             if ($hasDemandVar) {
                 $dem = (int)@GetValue($demVarID);
-                $effectiveDemand = ($dem === 1 || $dem === 2);
+                $effectiveDemand = ($dem === 2 || $dem === 3); // neue Regel
             } else {
                 if (is_finite($ist) && is_finite($soll)) {
                     $effectiveDemand = (($ist - $soll) > $hyst);
