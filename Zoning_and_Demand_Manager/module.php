@@ -58,32 +58,39 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterTimer('ZDM_Timer', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
     }
 
-    public function ApplyChanges()
-    {
-        parent::ApplyChanges();
+        public function ApplyChanges()
+        {
+            parent::ApplyChanges();
 
-        // ---> FIX: prevent early timer execution before kernel is ready
-        if (IPS_GetKernelRunlevel() !== KR_READY) {
-            $this->SetTimerInterval('ZDM_Timer', 0);
-            return;
+            if (IPS_GetKernelRunlevel() !== KR_READY) {
+                // Re-run ApplyChanges when kernel becomes ready
+                $this->RegisterMessage(0, IPS_KERNELMESSAGE);
+                // Keep timer off until ready
+                $this->SetTimerInterval('ZDM_Timer', 0);
+                return;
+            }
+
+            $this->SetStatus(102);
+
+            $intervalMs = max(1, (int)$this->ReadPropertyInteger('TimerInterval')) * 1000;
+            $this->SetTimerInterval('ZDM_Timer', $intervalMs);
+
+            $this->log(2, 'apply_changes', [
+                'interval_s' => (int)$this->ReadPropertyInteger('TimerInterval'),
+                'hyst'       => (float)$this->ReadPropertyFloat('Hysteresis')
+            ]);
         }
 
-        // Konfiguration prüfen (Minimal-Check)
-        $ok = true;
-        // (Optional mehr Checks hinzufügen, z.B. ob ControlledRooms nicht leer)
-        $this->SetStatus($ok ? 102 : 202);
-
-        $intervalMs = max(1, (int)$this->ReadPropertyInteger('TimerInterval')) * 1000;
-        $this->SetTimerInterval('ZDM_Timer', $intervalMs);
-
-        $this->log(2, 'apply_changes', [
-            'interval_s' => (int)$this->ReadPropertyInteger('TimerInterval'),
-            'hyst'       => (float)$this->ReadPropertyFloat('Hysteresis')
-        ]);
-    }
 
     // ---------- Public (Timer) ----------
 
+    public function MessageSink($TimeStamp, $SenderID, $Message, $Data)
+    {
+        if ($Message === IPS_KERNELMESSAGE && $Data[0] === KR_READY) {
+            // Kernel is ready → arm timer now
+            $this->ApplyChanges();
+        }
+    }
 
 
     public function ProcessZoning(): void
