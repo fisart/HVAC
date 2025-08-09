@@ -126,11 +126,11 @@ class Zoning_and_Demand_Manager extends IPSModule
 
             // Raumweise entscheiden & Klappen setzen
             $anyDemand = false;
+
             foreach ($rooms as $room) {
                 $name = (string)($room['name'] ?? 'room');
-                $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
-                $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
 
+                // 1) Fenster-Check (hat immer Vorrang)
                 $winOpen = $this->isWindowOpenStable($room);
                 if ($winOpen) {
                     $this->setFlap($room, false);
@@ -138,25 +138,57 @@ class Zoning_and_Demand_Manager extends IPSModule
                     continue;
                 }
 
+                // 2) Bedarfsausgabe (Integer-Link in der Raumkonfiguration)
+                //    unterstützte Keys: demandID | bedarfID | bedarfsausgabeID
+                $demVarID = (int)($room['demandID']
+                            ?? $room['bedarfID']
+                            ?? $room['bedarfsausgabeID']
+                            ?? 0);
+
+                if ($demVarID > 0 && IPS_VariableExists($demVarID)) {
+                    $dem = (int)@GetValue($demVarID);
+
+                    if ($dem === 0) {
+                        // explizit kein Bedarf -> Klappe zu
+                        $this->setFlap($room, false);
+                        $this->log(2, 'room_demand_flag_off_flap_closed', ['room'=>$name, 'dem'=>$dem]);
+                        continue;
+                    }
+                    if ($dem === 1 || $dem === 2) {
+                        // explizit Bedarf -> Klappe auf (unabhängig vom ΔT)
+                        $this->setFlap($room, true);
+                        $anyDemand = true;
+                        $this->log(2, 'room_demand_flag_on_flap_open', ['room'=>$name, 'dem'=>$dem]);
+                        continue;
+                    }
+                    // andere Werte -> weiter mit ΔT-Logik (Fallback)
+                    $this->log(3, 'room_demand_flag_other_fallback_delta', ['room'=>$name, 'dem'=>$dem]);
+                } else {
+                    // keine Bedarf-Variable konfiguriert -> ΔT-Fallback
+                    $this->log(3, 'room_no_demand_var_fallback_delta', ['room'=>$name]);
+                }
+
+                // 3) ΔT/Hysterese-Fallback (nur wenn Bedarfsausgabe nicht 0/1/2 war)
+                $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
+                $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
+
                 if (!is_finite($ist) || !is_finite($soll)) {
                     $this->log(1, 'invalid_temp_values', ['room'=>$name, 'ist'=>$ist, 'soll'=>$soll]);
                     $this->setFlap($room, false);
                     continue;
                 }
 
-                $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
+                $hyst  = (float)$this->ReadPropertyFloat('Hysteresis');
                 $delta = $ist - $soll; // >0 = Ist über Soll => Kühlbedarf
+
                 if ($delta > $hyst) {
-                    // Kühlen (Flap auf)
                     $this->setFlap($room, true);
                     $anyDemand = true;
                     $this->log(3, 'room_cooling_needed_flap_open', ['room'=>$name, 'ist'=>$ist, 'soll'=>$soll, 'delta'=>$delta]);
                 } elseif ($delta < -$hyst) {
-                    // Deutlich unter Soll -> sicher schließen
                     $this->setFlap($room, false);
                     $this->log(3, 'room_below_setpoint_flap_closed', ['room'=>$name, 'ist'=>$ist, 'soll'=>$soll, 'delta'=>$delta]);
                 } else {
-                    // Im deadband -> keine Änderung (optional schließen)
                     $this->log(3, 'room_in_deadband_keep', ['room'=>$name, 'ist'=>$ist, 'soll'=>$soll, 'delta'=>$delta]);
                 }
             }
@@ -167,32 +199,29 @@ class Zoning_and_Demand_Manager extends IPSModule
                 'standaloneMode' => (bool)$this->ReadPropertyBoolean('StandaloneMode')
             ]);
 
-            // -------- System schalten (Standalone oder Adaptive) --------
+            // System schalten (Standalone oder Adaptive)
             if ($anyDemand) {
                 if ($this->ReadPropertyBoolean('StandaloneMode')) {
                     $this->log(2, 'system_branch', ['mode' => 'standalone_on']);
-                    // fixed power/fan
                     $this->systemOnStandalone();
                 } else {
                     $this->log(2, 'system_branch', ['mode' => 'adaptive_on']);
-                    // adaptive: just turn system ON (booleans -> true)
-                    $this->systemSetPercent(1, 1); // maps to TRUE for bool actuators
+                    $this->systemSetPercent(1, 1); // bool-Relais -> TRUE
                     $this->log(2, 'system_on_adaptive_toggle');
                 }
             } else {
                 $this->log(2, 'system_branch', ['mode' => 'off']);
-                // in both modes: off
                 $this->systemOff();
             }
-            // ------------------------------------------------------------
 
-            // Aggregates berechnen (optional für Adaptive-Modul)
+            // Aggregates berechnen (weiterhin ΔT-basiert)
             $this->GetAggregates();
 
         } finally {
             $this->guardLeave();
         }
     }
+
 
     // ---------- Public (Orchestrator APIs) ----------
 
@@ -372,7 +401,13 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
     }
 
-    
+    private function GetInt(int $varID): int
+    {
+        if ($varID <= 0 || !IPS_VariableExists($varID)) return PHP_INT_MIN;
+        $v = @GetValue($varID);
+        return is_numeric($v) ? (int)$v : PHP_INT_MIN;
+    }
+
     private function toBool($v): bool
     {
         if (is_bool($v)) return $v;
