@@ -325,6 +325,25 @@ class Zoning_and_Demand_Manager extends IPSModule
             $soll = $this->GetFloat((int)($r['targetID'] ?? 0));
             $win  = $this->isWindowOpenStable($r);
             $anyWindow = $anyWindow || $win;
+            // Override: offene Klappe als aktiver Bedarf werten
+            $effectiveDemand = false;
+            $override = GetValue($this->GetIDForIdent('OverrideActive'));
+            if ($override) {
+                $flapVarID = (int)($r['flapID'] ?? 0);
+                $flapType  = strtolower((string)($r['flapType'] ?? 'boolean'));
+                if ($flapVarID > 0 && IPS_VariableExists($flapVarID)) {
+                    if ($flapType === 'linear') {
+                        $effectiveDemand = ((int)@GetValue($flapVarID)) > 0; // >0 => offen
+                    } else {
+                        $effectiveDemand = $this->toBool(@GetValue($flapVarID));
+                    }
+                }
+            }
+
+            // Nur wenn Override nicht bereits Bedarf gesetzt hat, normale Logik nutzen
+            if (!$effectiveDemand) {
+                // (bestehende Logik: Bedarfsausgabe 2/3, sonst ΔT-Fallback)
+            }
 
             // effektiver Bedarf: erst Bedarfsausgabe (1/2), sonst ΔT-Fallback
             $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
