@@ -356,20 +356,37 @@ class Zoning_and_Demand_Manager extends IPSModule
         $type = strtolower((string)($room['flapType'] ?? 'boolean'));
 
         if ($type === 'linear') {
-            $pctOpen  = $this->clamp((int)($room['flapOpenLinear'] ?? 100), 0, 100);
-            $pctClose = $this->clamp((int)($room['flapClosedLinear'] ?? 0),   0, 100);
-            $val = $open ? $pctOpen : $pctClose;
+            // linear: always send 0..100 integer
+            $pctOpen  = $this->toPercent($room['flapOpenLinear']  ?? 100);
+            $pctClose = $this->toPercent($room['flapClosedLinear'] ?? 0);
+            $val = $open ? $pctOpen : $pctClose; // int
             $this->writeVarSmart($varID, $val);
             $this->log(3, 'flap_set_linear', ['room'=>$room['name'] ?? 'room', 'value'=>$val]);
         } else {
-            // boolean
-            $valOpen  = $room['flapOpenValue']   ?? true;
-            $valClose = $room['flapClosedValue'] ?? false;
-            $val = $open ? $valOpen : $valClose;
+            // boolean: always send true/false (never strings)
+            $valOpen  = $this->toBool($room['flapOpenValue']   ?? true);
+            $valClose = $this->toBool($room['flapClosedValue'] ?? false);
+            $val = $open ? $valOpen : $valClose; // bool
             $this->writeVarSmart($varID, $val);
             $this->log(3, 'flap_set_boolean', ['room'=>$room['name'] ?? 'room', 'value'=>$val]);
         }
     }
+
+    
+    private function toBool($v): bool
+    {
+        if (is_bool($v)) return $v;
+        if (is_numeric($v)) return ((int)$v) >= 1;
+        $s = mb_strtolower(trim((string)$v));
+        return in_array($s, ['1','true','on','open','auf','yes','ja'], true);
+    }
+
+    private function toPercent($v): int
+    {
+        $n = (int)$v;
+        return $this->clamp($n, 0, 100);
+    }
+
 
     private function systemOnStandalone(): void
     {
