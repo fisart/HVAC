@@ -140,33 +140,27 @@ class Zoning_and_Demand_Manager extends IPSModule
 
                 // 2) Bedarfsausgabe (Integer-Link in der Raumkonfiguration)
                 //    unterstützte Keys: demandID | bedarfID | bedarfsausgabeID
-                $demVarID = (int)($room['demandID']
-                            ?? $room['bedarfID']
-                            ?? $room['bedarfsausgabeID']
-                            ?? 0);
+                // 2) Bedarfsausgabe (Integer-Link in der Raumkonfiguration)
+                $demVarID = (int)($room['demandID'] ?? $room['bedarfID'] ?? $room['bedarfsausgabeID'] ?? 0);
 
                 if ($demVarID > 0 && IPS_VariableExists($demVarID)) {
                     $dem = (int)@GetValue($demVarID);
 
-                    if ($dem === 0) {
-                        // explizit kein Bedarf -> Klappe zu
-                        $this->setFlap($room, false);
-                        $this->log(2, 'room_demand_flag_off_flap_closed', ['room'=>$name, 'dem'=>$dem]);
-                        continue;
-                    }
+                    // STRIKT: Nur 1/2 = auf, alles andere (inkl. 0/3/…) = zu
                     if ($dem === 1 || $dem === 2) {
-                        // explizit Bedarf -> Klappe auf (unabhängig vom ΔT)
                         $this->setFlap($room, true);
                         $anyDemand = true;
                         $this->log(2, 'room_demand_flag_on_flap_open', ['room'=>$name, 'dem'=>$dem]);
-                        continue;
+                    } else {
+                        $this->setFlap($room, false);
+                        $this->log(2, 'room_demand_flag_off_flap_closed', ['room'=>$name, 'dem'=>$dem]);
                     }
-                    // andere Werte -> weiter mit ΔT-Logik (Fallback)
-                    $this->log(3, 'room_demand_flag_other_fallback_delta', ['room'=>$name, 'dem'=>$dem]);
+                    continue; // KEIN ΔT-Fallback, wenn Bedarfsausgabe vorhanden ist
                 } else {
                     // keine Bedarf-Variable konfiguriert -> ΔT-Fallback
                     $this->log(3, 'room_no_demand_var_fallback_delta', ['room'=>$name]);
                 }
+
 
                 // 3) ΔT/Hysterese-Fallback (nur wenn Bedarfsausgabe nicht 0/1/2 war)
                 $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
