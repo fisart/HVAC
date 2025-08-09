@@ -301,6 +301,22 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
         if (function_exists('ACIPS_ForceActionAndLearn')) {
             $action = (string)($currentStage['actions'][$actionIdx] ?? '');
+            // Ensure physical AC/Fan relays follow the step action (ZDM handles the real outputs)
+            if ($action !== '' && strpos($action, ':') !== false) {
+                list($p, $f) = array_map('intval', explode(':', $action, 2));
+                $zid = (int)$this->ReadPropertyInteger('ZoningManagerID');
+                if ($zid > 0 && function_exists('ZDM_CommandSystem')) {
+                    @ZDM_CommandSystem($zid, $p, $f);
+                    $this->LogMessage(
+                        'ORCH: zdm_command_system ' . json_encode(['p'=>$p,'f'=>$f], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE),
+                        KL_MESSAGE
+                    );
+                } else {
+                    $this->LogMessage('ORCH: ZDM_CommandSystem() not available or ZDM link missing', KL_WARNING);
+                }
+            }
+
+
             $result = @json_decode(ACIPS_ForceActionAndLearn($adaptiveID, $action), true);
             $this->LogMessage(
                 "ORCH Step {$stageIdx}:{$actionIdx} | Action: {$action} | Reward: " . number_format((float)($result['reward'] ?? 0), 2),
