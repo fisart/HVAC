@@ -165,20 +165,30 @@ class Zoning_and_Demand_Manager extends IPSModule
 
             // System schalten (Standalone optional)
             if ($this->ReadPropertyBoolean('StandaloneMode')) {
-                if ($anyDemand) {
+  // System schalten (Standalone oder Adaptive)
+            if ($anyDemand) {
+                if ($this->ReadPropertyBoolean('StandaloneMode')) {
+                    // fixed power/fan
                     $this->systemOnStandalone();
                 } else {
-                    $this->systemOff();
+                    // adaptive: just turn system ON (booleans -> true)
+                    $this->systemSetPercent(1, 1); // maps to TRUE for bool actuators
+                    $this->log(2, 'system_on_adaptive_toggle');
                 }
+            } else {
+                // in both modes: off
+                $this->systemOff();
             }
 
-            // Aggregates berechnen (optional für Adaptive-Modul)
-            $this->GetAggregates();
+                }
 
-        } finally {
-            $this->guardLeave();
+                // Aggregates berechnen (optional für Adaptive-Modul)
+                $this->GetAggregates();
+
+            } finally {
+                $this->guardLeave();
+            }
         }
-    }
 
     // ---------- Public (Orchestrator APIs) ----------
 
