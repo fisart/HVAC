@@ -58,29 +58,28 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterTimer('ZDM_Timer', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
     }
 
-        public function ApplyChanges()
-        {
-            parent::ApplyChanges();
+    public function ApplyChanges()
+    {
+        parent::ApplyChanges();
 
-            if (IPS_GetKernelRunlevel() !== KR_READY) {
-                // Re-run ApplyChanges when kernel becomes ready
-                $this->RegisterMessage(0, IPS_KERNELMESSAGE);
-                // Keep timer off until ready
-                $this->SetTimerInterval('ZDM_Timer', 0);
-                return;
-            }
-
-            $this->SetStatus(102);
-
-            $intervalMs = max(1, (int)$this->ReadPropertyInteger('TimerInterval')) * 1000;
-            $this->SetTimerInterval('ZDM_Timer', $intervalMs);
-
-            $this->log(2, 'apply_changes', [
-                'interval_s' => (int)$this->ReadPropertyInteger('TimerInterval'),
-                'hyst'       => (float)$this->ReadPropertyFloat('Hysteresis')
-            ]);
+        if (IPS_GetKernelRunlevel() !== KR_READY) {
+            // Re-run ApplyChanges when kernel becomes ready
+            $this->RegisterMessage(0, IPS_KERNELMESSAGE);
+            // Keep timer off until ready
+            $this->SetTimerInterval('ZDM_Timer', 0);
+            return;
         }
 
+        $this->SetStatus(102);
+
+        $intervalMs = max(1, (int)$this->ReadPropertyInteger('TimerInterval')) * 1000;
+        $this->SetTimerInterval('ZDM_Timer', $intervalMs);
+
+        $this->log(2, 'apply_changes', [
+            'interval_s' => (int)$this->ReadPropertyInteger('TimerInterval'),
+            'hyst'       => (float)$this->ReadPropertyFloat('Hysteresis')
+        ]);
+    }
 
     // ---------- Public (Timer) ----------
 
@@ -91,7 +90,6 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->ApplyChanges();
         }
     }
-
 
     public function ProcessZoning(): void
     {
@@ -169,9 +167,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                 'standaloneMode' => (bool)$this->ReadPropertyBoolean('StandaloneMode')
             ]);
 
-            // System schalten (Standalone optional)
-            if ($this->ReadPropertyBoolean('StandaloneMode')) {
-  // System schalten (Standalone oder Adaptive)
+            // -------- System schalten (Standalone oder Adaptive) --------
             if ($anyDemand) {
                 if ($this->ReadPropertyBoolean('StandaloneMode')) {
                     $this->log(2, 'system_branch', ['mode' => 'standalone_on']);
@@ -188,16 +184,15 @@ class Zoning_and_Demand_Manager extends IPSModule
                 // in both modes: off
                 $this->systemOff();
             }
+            // ------------------------------------------------------------
 
-                }
+            // Aggregates berechnen (optional für Adaptive-Modul)
+            $this->GetAggregates();
 
-                // Aggregates berechnen (optional für Adaptive-Modul)
-                $this->GetAggregates();
-
-            } finally {
-                $this->guardLeave();
-            }
+        } finally {
+            $this->guardLeave();
         }
+    }
 
     // ---------- Public (Orchestrator APIs) ----------
 
@@ -210,9 +205,9 @@ class Zoning_and_Demand_Manager extends IPSModule
         $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1]['function'] ?? 'unknown';
         $this->log(2, 'DEBUG_OVERRIDE_SET_CALL', ['caller' => $caller, 'on' => $on]);
 
-        if (!$this->guardEnter()) { 
-            $this->log(1, 'guard_timeout'); 
-            return; 
+        if (!$this->guardEnter()) {
+            $this->log(1, 'guard_timeout');
+            return;
         }
         try {
             // Before/after variable verification
@@ -238,7 +233,6 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->guardLeave();
         }
     }
-
 
     /**
      * Orchestrator kommandiert Klappen explizit: ["Living Room"=>true, "Kitchen"=>false, ...]
@@ -327,10 +321,12 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         return json_encode($agg);
     }
+
     public function GetRoomConfigurations(): string
     {
         return $this->ReadPropertyString('ControlledRooms');
     }
+
     // ---------- Intern: Flaps/System ----------
 
     private function applyAllFlaps(bool $open): void
