@@ -49,6 +49,8 @@ class Zoning_and_Demand_Manager extends IPSModule
         // ---- Attribute ----
         $this->RegisterAttributeString('WindowStable', '{}');    // {roomName:{open:bool, ts:int}}
         $this->RegisterAttributeString('LastAggregates', '{}');  // Cache/Debug
+        $this->RegisterAttributeString('LastOrchestratorFlaps', '[]');
+
 
         // ---- Status-Variablen ----
         $this->RegisterVariableBoolean('OverrideActive', 'Override active', '~Alert', 10);
@@ -283,6 +285,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                 }
                 $this->setFlap($rooms[$nameStr], (bool)$open);
             }
+            $this->WriteAttributeString('LastOrchestratorFlaps', $flapConfigJson);
             $this->log(2, 'orchestrator_flaps_applied', ['stage' => $stageName, 'cfg' => $cfg]);
         } finally {
             $this->guardLeave();
