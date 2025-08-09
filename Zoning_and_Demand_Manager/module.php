@@ -316,27 +316,48 @@ class Zoning_and_Demand_Manager extends IPSModule
     public function GetAggregates(): string
     {
         $rooms = $this->getRooms();
-        $numActive = 0;
-        $maxDeltaT = 0.0;
-        $anyWindow = false;
+        $numActive   = 0;
+        $maxDeltaT   = 0.0;
+        $anyWindow   = false;
         $activeRooms = [];
 
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
 
         foreach ($rooms as $r) {
+            $name = (string)($r['name'] ?? 'room');
             $ist  = $this->GetFloat((int)($r['tempID'] ?? 0));
             $soll = $this->GetFloat((int)($r['targetID'] ?? 0));
             $win  = $this->isWindowOpenStable($r);
+            $anyWindow = $anyWindow || $win;
 
-            if (is_finite($ist) && is_finite($soll)) {
-                $delta = $ist - $soll; // >0 = Kühlbedarf
-                if (!$win && ($delta > $hyst)) {
-                    $numActive++;
-                    $activeRooms[] = (string)($r['name'] ?? 'room');
-                    $maxDeltaT = max($maxDeltaT, abs($delta));
+            // effektiver Bedarf: erst Bedarfsausgabe (1/2), sonst ΔT-Fallback
+            $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
+            $hasDemandVar = ($demVarID > 0 && IPS_VariableExists($demVarID));
+            $effectiveDemand = false;
+
+            if ($hasDemandVar) {
+                $dem = (int)@GetValue($demVarID);
+                $effectiveDemand = ($dem === 1 || $dem === 2);
+            } else {
+                if (is_finite($ist) && is_finite($soll)) {
+                    $effectiveDemand = (($ist - $soll) > $hyst);
                 }
             }
-            $anyWindow = $anyWindow || $win;
+
+            // Fenster offen blockiert immer
+            if ($win) {
+                $effectiveDemand = false;
+            }
+
+            if ($effectiveDemand) {
+                $numActive++;
+                $activeRooms[] = $name;
+
+                if (is_finite($ist) && is_finite($soll)) {
+                    $delta = abs($ist - $soll);
+                    $maxDeltaT = max($maxDeltaT, $delta);
+                }
+            }
         }
 
         $agg = [
