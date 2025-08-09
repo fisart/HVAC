@@ -2,7 +2,7 @@
 /**
  * @file          module.php
  * @author        Artur Fischer & AI Consultant
- * @version       2.4 (Status model + robust logging + flapMap fix)
+ * @version       2.41 (Status model + robust logging + flapMap fix)
  * @date          2025-08-08
  */
 
