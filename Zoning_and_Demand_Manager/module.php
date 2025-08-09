@@ -327,6 +327,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         // Kalibrierungsmodus erkennen: Override aktiv + Orchestrator-Flap-Map vorhanden
         $override = GetValue($this->GetIDForIdent('OverrideActive'));
         $flapMap  = json_decode($this->ReadAttributeString('LastOrchestratorFlaps') ?: '[]', true);
+        
         $calibMode = ($override && is_array($flapMap) && !empty($flapMap));
 
         foreach ($rooms as $r) {
