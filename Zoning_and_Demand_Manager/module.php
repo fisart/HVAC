@@ -105,7 +105,10 @@ class Zoning_and_Demand_Manager extends IPSModule
             $override = GetValue($this->GetIDForIdent('OverrideActive'));
             $this->log(2, 'DEBUG_OVERRIDE_CHECK', ['override_value' => (bool)$override]);
             if ($override) {
-                $this->log(2, 'override_active_skip_cycle');
+                // In Override: keine Auto-Steuerung, aber Aggregates berechnen,
+                // damit ADHVAC gültigen Bedarf sieht (Klappen⇒aktiv).
+                $this->log(2, 'override_active_mode_process');
+                $this->GetAggregates();
                 return;
             }
 
