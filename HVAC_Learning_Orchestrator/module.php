@@ -110,6 +110,17 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     // Status setzen
     $this->WriteAttributeString('CalibrationStatus', 'Running');
+    // Timer für die Schrittfolge aktivieren (Default 60s) und Indizes resetten
+    $zdmID = (int)$this->ReadPropertyInteger('ZoningManagerID');
+    $zdmIntervalSec = (int)IPS_GetProperty($zdmID, 'TimerInterval'); // Sekundenwert aus ZDM
+    IPS_SetTimerInterval(
+        $this->GetIDForIdent('CalibrationTimer'),
+        max(1000, $zdmIntervalSec * 1000) // in ms, min. 1s
+    );
+
+    $this->WriteAttributeInteger('CurrentStageIndex', 0);
+    $this->WriteAttributeInteger('CurrentActionIndex', 0);
+
     $this->SetStatus(102);
     $this->LogMessage('--- ORCH: Starting System Calibration ---', KL_MESSAGE);
 
