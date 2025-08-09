@@ -163,19 +163,28 @@ class Zoning_and_Demand_Manager extends IPSModule
                 }
             }
 
+            // --- Instrumentation: System-Entscheidung loggen
+            $this->log(2, 'DECIDE_SYSTEM', [
+                'anyDemand'      => $anyDemand,
+                'standaloneMode' => (bool)$this->ReadPropertyBoolean('StandaloneMode')
+            ]);
+
             // System schalten (Standalone optional)
             if ($this->ReadPropertyBoolean('StandaloneMode')) {
   // System schalten (Standalone oder Adaptive)
             if ($anyDemand) {
                 if ($this->ReadPropertyBoolean('StandaloneMode')) {
+                    $this->log(2, 'system_branch', ['mode' => 'standalone_on']);
                     // fixed power/fan
                     $this->systemOnStandalone();
                 } else {
+                    $this->log(2, 'system_branch', ['mode' => 'adaptive_on']);
                     // adaptive: just turn system ON (booleans -> true)
                     $this->systemSetPercent(1, 1); // maps to TRUE for bool actuators
                     $this->log(2, 'system_on_adaptive_toggle');
                 }
             } else {
+                $this->log(2, 'system_branch', ['mode' => 'off']);
                 // in both modes: off
                 $this->systemOff();
             }
@@ -388,6 +397,14 @@ class Zoning_and_Demand_Manager extends IPSModule
         $acVar  = (int)$this->ReadPropertyInteger('MainACOnOffLink');
         $fanVar = (int)$this->ReadPropertyInteger('MainFanControlLink');
 
+        // Instrumentation
+        $this->log(3, 'system_set_percent', [
+            'power' => $power,
+            'fan'   => $fan,
+            'acVar' => $acVar,
+            'fanVar'=> $fanVar
+        ]);
+
         if ($acVar > 0)  $this->writeVarSmart($acVar,  $power);
         if ($fanVar > 0) $this->writeVarSmart($fanVar, $fan);
     }
@@ -395,7 +412,18 @@ class Zoning_and_Demand_Manager extends IPSModule
     private function writeVarSmart(int $varID, $value): void
     {
         if ($varID <= 0) return;
-        $vt = IPS_GetVariable($varID)['VariableType'] ?? -1;
+
+        $vinfo = IPS_GetVariable($varID);
+        $vt = $vinfo['VariableType'] ?? -1;
+        $hasAction = ($vinfo['VariableAction'] ?? 0) !== 0;
+
+        // Instrumentation
+        $this->log(3, 'writeVarSmart', [
+            'varID'     => $varID,
+            'varType'   => $vt,
+            'hasAction' => $hasAction,
+            'value'     => $value
+        ]);
 
         switch ($vt) {
             case 0: // boolean
