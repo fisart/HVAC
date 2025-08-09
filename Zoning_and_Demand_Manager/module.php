@@ -324,87 +324,64 @@ class Zoning_and_Demand_Manager extends IPSModule
         $activeRooms = [];
 
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
-        // Kalibrierungsmodus erkennen: Override aktiv + Orchestrator-Flap-Map vorhanden
+
+        // --- Kalibrierungsmodus erkennen ---
         $override = GetValue($this->GetIDForIdent('OverrideActive'));
-        $flapMap  = json_decode($this->ReadAttributeString('LastOrchestratorFlaps') ?: '[]', true);
-        $calibMode = ($override && is_array($flapMap) && !empty($flapMap));
+        $rawFlapMap = json_decode($this->ReadAttributeString('LastOrchestratorFlaps') ?: '[]', true);
+        $flapMap = [];
+        if (is_array($rawFlapMap)) {
+            foreach ($rawFlapMap as $k => $v) {
+                $flapMap[mb_strtolower(trim((string)$k))] = $this->toBool($v);
+            }
+        }
+        $calibMode = ($override && !empty($flapMap));
+
+        $this->log(3, 'agg_start', [
+            'override'  => $override,
+            'calibMode' => $calibMode,
+            'flapMap'   => $flapMap
+        ]);
 
         foreach ($rooms as $r) {
             $name = (string)($r['name'] ?? 'room');
+            $nameKey = mb_strtolower(trim($name));
+
             $ist  = $this->GetFloat((int)($r['tempID'] ?? 0));
             $soll = $this->GetFloat((int)($r['targetID'] ?? 0));
             $win  = $this->isWindowOpenStable($r);
             $anyWindow = $anyWindow || $win;
             $effectiveDemand = false;
 
-            $effectiveDemand = false;
-
             if ($calibMode) {
-                $nameStr = (string)($r['name'] ?? '');
-                if ($nameStr !== '' && array_key_exists($nameStr, $flapMap)) {
-                    $effectiveDemand = (bool)$flapMap[$nameStr]; // Plan: Klappe offen => aktiv
+                // --- Im Kalibrierungsmodus nur den Plan verwenden ---
+                if (array_key_exists($nameKey, $flapMap)) {
+                    $effectiveDemand = $flapMap[$nameKey];
+                    $this->log(3, 'agg_calib_demand', ['room' => $name, 'demand' => $effectiveDemand]);
+                } else {
+                    $this->log(1, 'agg_calib_room_not_in_plan', ['room' => $name]);
                 }
             } else {
-                // --- bestehende Logik unverändert: Bedarfsausgabe 2/3, sonst ΔT-Fallback ---
+                // --- Normale Logik ---
                 $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
-                $hasDemandVar = ($demVarID > 0 && IPS_VariableExists($demVarID));
-                if ($hasDemandVar) {
+                if ($demVarID > 0 && IPS_VariableExists($demVarID)) {
                     $dem = (int)@GetValue($demVarID);
                     $effectiveDemand = ($dem === 2 || $dem === 3);
-                } else {
-                    if (is_finite($ist) && is_finite($soll)) {
-                        $effectiveDemand = (($ist - $soll) > $hyst);
-                    }
-                }
-            }
-
-            // Fenster-offen blockiert immer (bleibt unverändert)
-            if ($win) {
-                $effectiveDemand = false;
-            }
-           
-            // Override: offene Klappe als aktiver Bedarf werten
-            $effectiveDemand = false;
-            $override = GetValue($this->GetIDForIdent('OverrideActive'));
-            if ($override) {
-                $flapVarID = (int)($r['flapID'] ?? 0);
-                $flapType  = strtolower((string)($r['flapType'] ?? 'boolean'));
-                if ($flapVarID > 0 && IPS_VariableExists($flapVarID)) {
-                    if ($flapType === 'linear') {
-                        $effectiveDemand = ((int)@GetValue($flapVarID)) > 0; // >0 => offen
-                    } else {
-                        $effectiveDemand = $this->toBool(@GetValue($flapVarID));
-                    }
-                }
-            }
-
-            // Nur wenn Override nicht bereits Bedarf gesetzt hat, normale Logik nutzen
-            if (!$effectiveDemand) {
-                // (bestehende Logik: Bedarfsausgabe 2/3, sonst ΔT-Fallback)
-            }
-
-            // effektiver Bedarf: erst Bedarfsausgabe (1/2), sonst ΔT-Fallback
-            $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
-            $hasDemandVar = ($demVarID > 0 && IPS_VariableExists($demVarID));
-
-            if ($hasDemandVar) {
-                $dem = (int)@GetValue($demVarID);
-                $effectiveDemand = ($dem === 2 || $dem === 3); // neue Regel
-            } else {
-                if (is_finite($ist) && is_finite($soll)) {
+                    $this->log(3, 'agg_demand_var', ['room' => $name, 'dem' => $dem, 'effectiveDemand' => $effectiveDemand]);
+                } elseif (is_finite($ist) && is_finite($soll)) {
                     $effectiveDemand = (($ist - $soll) > $hyst);
+                    $this->log(3, 'agg_delta_fallback', ['room' => $name, 'ist' => $ist, 'soll' => $soll, 'eff' => $effectiveDemand]);
                 }
             }
 
-            // Fenster offen blockiert immer
-            if ($win) {
+            // Fenster-offen blockiert immer
+            if ($win && $effectiveDemand) {
                 $effectiveDemand = false;
+                $this->log(2, 'agg_window_override', ['room' => $name]);
             }
 
             if ($effectiveDemand) {
                 $numActive++;
                 $activeRooms[] = $name;
-
                 if (is_finite($ist) && is_finite($soll)) {
                     $delta = abs($ist - $soll);
                     $maxDeltaT = max($maxDeltaT, $delta);
@@ -419,10 +396,11 @@ class Zoning_and_Demand_Manager extends IPSModule
             'activeRooms'    => $activeRooms
         ];
         $this->WriteAttributeString('LastAggregates', json_encode($agg));
-        $this->log(3, 'agg', $agg);
+        $this->log(3, 'agg_result', $agg);
 
         return json_encode($agg);
     }
+  
 
     public function GetRoomConfigurations(): string
     {
