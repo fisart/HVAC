@@ -204,6 +204,13 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessLearning(): void
     {
+        // Debug: Properties beim Start loggen
+        $this->log(3, 'process_learning_start', [
+            'PowerOutputLink' => $this->ReadPropertyInteger('PowerOutputLink'),
+            'FanOutputLink' => $this->ReadPropertyInteger('FanOutputLink'),
+            'ACActiveLink' => $this->ReadPropertyInteger('ACActiveLink')
+        ]);
+        
         if ($this->ReadPropertyBoolean('ManualOverride')) {
             $this->log(2, 'manual_override_active');
             return;
@@ -598,8 +605,12 @@ class adaptive_HVAC_control extends IPSModule
 
     private function setPercent(int $varID, int $val): void
     {
-        if ($varID <= 0 || !IPS_VariableExists($varID)) return;
+        if ($varID <= 0 || !IPS_VariableExists($varID)) {
+            $this->log(1, 'setPercent_invalid_var', ['varID' => $varID, 'val' => $val]);
+            return;
+        }
         $vt = IPS_GetVariable($varID)['VariableType'] ?? -1;
+        $this->log(3, 'setPercent_exec', ['varID' => $varID, 'val' => $val, 'type' => $vt]);
         switch ($vt) {
             case 0: @RequestAction($varID, $val >= 1); break;   // bool → on/off
             case 1: @RequestAction($varID, (int)$val); break;   // int
