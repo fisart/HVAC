@@ -576,10 +576,12 @@ class adaptive_HVAC_control extends IPSModule
     {
         $p = max(0, min(100, $p));
         $f = max(0, min(100, $f));
-        $this->setPercent($this->ReadPropertyInteger('PowerOutputLink'), $p);
-        $this->setPercent($this->ReadPropertyInteger('FanOutputLink'),   $f);
+        $powerVarID = $this->ReadPropertyInteger('PowerOutputLink');
+        $fanVarID = $this->ReadPropertyInteger('FanOutputLink');
+        $this->setPercent($powerVarID, $p);
+        $this->setPercent($fanVarID, $f);
         $this->WriteAttributeString('LastAction', $p.':'.$f);
-        $this->log(2, 'apply_action', ['p'=>$p,'f'=>$f]);
+        $this->log(2, 'apply_action', ['p'=>$p,'f'=>$f, 'powerVarID'=>$powerVarID, 'fanVarID'=>$fanVarID]);
     }
 
     private function limitDeltas(int $p, int $f): array
