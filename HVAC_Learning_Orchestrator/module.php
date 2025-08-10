@@ -97,99 +97,36 @@ class HVAC_Learning_Orchestrator extends IPSModule
     }
 
     public function StartCalibration()
-{
-    $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
-    $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
+    {
+        $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
+        $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
 
-    $this->LogMessage("ORCH: StartCalibration triggered. ZDM={$zoningID}, ADAPT={$adaptiveID}", KL_MESSAGE);
+        $this->LogMessage("ORCH: StartCalibration triggered. ZDM={$zoningID}, ADAPT={$adaptiveID}", KL_MESSAGE);
 
-    if ($zoningID === 0 || $adaptiveID === 0) {
-        $this->LogMessage("ORCH: Missing links – cannot start calibration (ZDM/ADAPT is 0).", KL_ERROR);
-        return;
-    }
-
-    // Status setzen
-    $this->WriteAttributeString('CalibrationStatus', 'Running');
-    $zdmID = (int)$this->ReadPropertyInteger('ZoningManagerID');
-    $zdmIntervalSec = (int)IPS_GetProperty($zdmID, 'TimerInterval'); // Sekunden aus ZDM
-    $this->SetTimerInterval('CalibrationTimer', max(1000, $zdmIntervalSec * 1000));
-
-    $this->WriteAttributeInteger('CurrentStageIndex', 0);
-    $this->WriteAttributeInteger('CurrentActionIndex', 0);
-    // Timer für die Schrittfolge aktivieren (Default 60s)
-    $zdmID = (int)$this->ReadPropertyInteger('ZoningManagerID');
-    $zdmIntervalSec = (int)IPS_GetProperty($zdmID, 'TimerInterval'); // Sekunden aus ZDM
-    $this->SetTimerInterval('CalibrationTimer', max(1000, $zdmIntervalSec * 1000));
-    $this->WriteAttributeInteger('CurrentStageIndex', 0);
-    $this->WriteAttributeInteger('CurrentActionIndex', 0);
-    $this->SetStatus(102);
-    $this->LogMessage('--- ORCH: Starting System Calibration ---', KL_MESSAGE);
-
-    // Originalziele sichern (falls vorhanden)
-    if (method_exists($this, 'saveOriginalTargets')) {
-        $this->saveOriginalTargets();
-    }
-
-    // ZDM Override einschalten
-    if (function_exists('ZDM_SetOverrideMode')) {
-        $this->LogMessage("ORCH: Sending Override=true to ZDM instance {$zoningID}", KL_MESSAGE);
-        // before calling ZDM_SetOverrideMode(...)
-        $overrideValue = true;
-        $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($overrideValue ? 'true' : 'false'), KL_MESSAGE);
-        ZDM_SetOverrideMode($zoningID, $overrideValue);
-
-        // Verifikation: OverrideActive in der ZDM-Instanz prüfen
-        $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
-        if ($vid) {
-            $val = (bool) @GetValue($vid);
-            $this->LogMessage('ORCH: ZDM OverrideActive after StartCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
-        } else {
-            $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StartCalibration)', KL_WARNING);
+        if ($zoningID === 0 || $adaptiveID === 0) {
+            $this->LogMessage("ORCH: Missing links – cannot start calibration (ZDM/ADAPT is 0).", KL_ERROR);
+            return;
         }
-    } else {
-        $this->LogMessage('ORCH: ZDM_SetOverrideMode() not available', KL_ERROR);
-    }
 
-    // Adaptive-Modus (optional, falls API vorhanden)
-    if (function_exists('ACIPS_SetMode')) {
-        ACIPS_SetMode($adaptiveID, 'orchestrated');
-        $this->LogMessage('ORCH: ACIPS_SetMode(orchestrated) requested', KL_MESSAGE);
-    } else {
-        $this->LogMessage('ORCH: ACIPS_SetMode() not available', KL_WARNING);
-    }
+        // Set status and initialize calibration
+        $this->WriteAttributeString('CalibrationStatus', 'Running');
+        $this->WriteAttributeInteger('CurrentStageIndex', 0);
+        $this->WriteAttributeInteger('CurrentActionIndex', 0);
+        $this->SetStatus(102);
+        $this->LogMessage('--- ORCH: Starting System Calibration ---', KL_MESSAGE);
 
-    // Hier deine bestehende Startlogik weiterlaufen lassen (Plan generieren, Timer/Step starten, etc.)
-    if (method_exists($this, 'ProposePlan')) {
-        // optional/sofern gewünscht: Plan neu erzeugen
-        // $this->ProposePlan();
-    }
-    if (method_exists($this, 'RunNextStep')) {
-        $this->RunNextStep();
-    }
+        // Start timer with ZDM interval
+        $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
+        // Originalziele sichern (falls vorhanden)
+        if (method_exists($this, 'saveOriginalTargets')) {
+            $this->saveOriginalTargets();
+        }
 
-    // UI aktualisieren
-    if (method_exists($this, 'ReloadForm')) {
-        $this->ReloadForm();
-    }
-}
-
-   public function StopCalibration()
-{
-    // Timer sicher ausschalten
-    $this->SetTimerInterval('CalibrationTimer', 0);
-    $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
-    $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
-
-    // Ensure timer is off while stopping
-    $this->SetTimerInterval('CalibrationTimer', 0);
-
-
-    // 1) Override im ZDM ausschalten
-    if ($zoningID > 0) {
+        // ZDM Override einschalten
         if (function_exists('ZDM_SetOverrideMode')) {
-            $this->LogMessage("ORCH: Sending Override=false to ZDM instance {$zoningID}", KL_MESSAGE);
+            $this->LogMessage("ORCH: Sending Override=true to ZDM instance {$zoningID}", KL_MESSAGE);
             // before calling ZDM_SetOverrideMode(...)
-            $overrideValue = false;
+            $overrideValue = true;
             $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($overrideValue ? 'true' : 'false'), KL_MESSAGE);
             ZDM_SetOverrideMode($zoningID, $overrideValue);
 
@@ -197,57 +134,112 @@ class HVAC_Learning_Orchestrator extends IPSModule
             $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
             if ($vid) {
                 $val = (bool) @GetValue($vid);
-                $this->LogMessage('ORCH: ZDM OverrideActive after StopCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
+                $this->LogMessage('ORCH: ZDM OverrideActive after StartCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
             } else {
-                $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StopCalibration)', KL_WARNING);
+                $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StartCalibration)', KL_WARNING);
             }
         } else {
             $this->LogMessage('ORCH: ZDM_SetOverrideMode() not available', KL_ERROR);
         }
-    } else {
-        $this->LogMessage("ORCH: No ZDM instance linked – cannot set Override=false", KL_WARNING);
+
+        // Adaptive-Modus (optional, falls API vorhanden)
+        if (function_exists('ACIPS_SetMode')) {
+            ACIPS_SetMode($adaptiveID, 'orchestrated');
+            $this->LogMessage('ORCH: ACIPS_SetMode(orchestrated) requested', KL_MESSAGE);
+        } else {
+            $this->LogMessage('ORCH: ACIPS_SetMode() not available', KL_WARNING);
+        }
+
+        // Hier deine bestehende Startlogik weiterlaufen lassen (Plan generieren, Timer/Step starten, etc.)
+        if (method_exists($this, 'ProposePlan')) {
+            // optional/sofern gewünscht: Plan neu erzeugen
+            // $this->ProposePlan();
+        }
+        if (method_exists($this, 'RunNextStep')) {
+            $this->RunNextStep();
+        }
+
+        // UI aktualisieren
+        if (method_exists($this, 'ReloadForm')) {
+            $this->ReloadForm();
+        }
     }
 
-    // 2) Adaptive: neutralen Schritt lernen lassen + Modus zurücksetzen
-    if ($adaptiveID > 0) {
-        if (function_exists('ACIPS_ForceActionAndLearn')) {
-            // WICHTIG: 2. Argument ist Pflicht → neutraler Output "0:0"
-            $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn("0:0") requested', KL_MESSAGE);
-            ACIPS_ForceActionAndLearn($adaptiveID, '0:0');
-            // ZDM hart auf 0:0 setzen (unabhängig von Min-Grenzen im Adaptive-Modul)
-            if ($zoningID > 0 && function_exists('ZDM_CommandSystem')) {
-                $this->LogMessage('ORCH: Forcing ZDM system output to 0:0', KL_MESSAGE);
-                ZDM_CommandSystem($zoningID, 0, 0);
+   public function StopCalibration()
+    {
+        // Timer sicher ausschalten
+        $this->SetTimerInterval('CalibrationTimer', 0);
+        $zoningID   = (int)$this->ReadPropertyInteger('ZoningManagerID');
+        $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
+
+        // Ensure timer is off while stopping
+        $this->SetTimerInterval('CalibrationTimer', 0);
+
+
+        // 1) Override im ZDM ausschalten
+        if ($zoningID > 0) {
+            if (function_exists('ZDM_SetOverrideMode')) {
+                $this->LogMessage("ORCH: Sending Override=false to ZDM instance {$zoningID}", KL_MESSAGE);
+                // before calling ZDM_SetOverrideMode(...)
+                $overrideValue = false;
+                $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($overrideValue ? 'true' : 'false'), KL_MESSAGE);
+                ZDM_SetOverrideMode($zoningID, $overrideValue);
+
+                // Verifikation: OverrideActive in der ZDM-Instanz prüfen
+                $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
+                if ($vid) {
+                    $val = (bool) @GetValue($vid);
+                    $this->LogMessage('ORCH: ZDM OverrideActive after StopCalibration = ' . ($val ? 'true' : 'false'), KL_MESSAGE);
+                } else {
+                    $this->LogMessage('ORCH: OverrideActive var not found in ZDM instance (after StopCalibration)', KL_WARNING);
+                }
+            } else {
+                $this->LogMessage('ORCH: ZDM_SetOverrideMode() not available', KL_ERROR);
+            }
+        } else {
+            $this->LogMessage("ORCH: No ZDM instance linked – cannot set Override=false", KL_WARNING);
+        }
+
+        // 2) Adaptive: neutralen Schritt lernen lassen + Modus zurücksetzen
+        if ($adaptiveID > 0) {
+            if (function_exists('ACIPS_ForceActionAndLearn')) {
+                // WICHTIG: 2. Argument ist Pflicht → neutraler Output "0:0"
+                $this->LogMessage('ORCH: ACIPS_ForceActionAndLearn("0:0") requested', KL_MESSAGE);
+                ACIPS_ForceActionAndLearn($adaptiveID, '0:0');
+                // ZDM hart auf 0:0 setzen (unabhängig von Min-Grenzen im Adaptive-Modul)
+                if ($zoningID > 0 && function_exists('ZDM_CommandSystem')) {
+                    $this->LogMessage('ORCH: Forcing ZDM system output to 0:0', KL_MESSAGE);
+                    ZDM_CommandSystem($zoningID, 0, 0);
+                }
+
+            } else {
+                $this->LogMessage('ORCH StopCalibration: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
             }
 
+            if (function_exists('ACIPS_SetMode')) {
+                ACIPS_SetMode($adaptiveID, 'cooperative');
+                $this->LogMessage('ORCH: ACIPS_SetMode(cooperative) requested', KL_MESSAGE);
+            } else {
+                $this->LogMessage('ORCH StopCalibration: ACIPS_SetMode() not available', KL_ERROR);
+            }
         } else {
-            $this->LogMessage('ORCH StopCalibration: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
+            $this->LogMessage('ORCH: No Adaptive instance linked – skipping AC reset', KL_WARNING);
         }
 
-        if (function_exists('ACIPS_SetMode')) {
-            ACIPS_SetMode($adaptiveID, 'cooperative');
-            $this->LogMessage('ORCH: ACIPS_SetMode(cooperative) requested', KL_MESSAGE);
-        } else {
-            $this->LogMessage('ORCH StopCalibration: ACIPS_SetMode() not available', KL_ERROR);
+        // 3) Original-Zieltemperaturen wiederherstellen (falls implementiert)
+        if (method_exists($this, 'restoreOriginalTargets')) {
+            $this->restoreOriginalTargets();
         }
-    } else {
-        $this->LogMessage('ORCH: No Adaptive instance linked – skipping AC reset', KL_WARNING);
-    }
 
-    // 3) Original-Zieltemperaturen wiederherstellen (falls implementiert)
-    if (method_exists($this, 'restoreOriginalTargets')) {
-        $this->restoreOriginalTargets();
-    }
+        // 4) Status / UI
+        $this->WriteAttributeString('CalibrationStatus', 'Done');
+        $this->SetStatus(102); // grün bleiben
+        $this->LogMessage('ORCH: Calibration finished (status=Done).', KL_MESSAGE);
 
-    // 4) Status / UI
-    $this->WriteAttributeString('CalibrationStatus', 'Done');
-    $this->SetStatus(102); // grün bleiben
-    $this->LogMessage('ORCH: Calibration finished (status=Done).', KL_MESSAGE);
-
-    if (method_exists($this, 'ReloadForm')) {
-        $this->ReloadForm();
+        if (method_exists($this, 'ReloadForm')) {
+            $this->ReloadForm();
+        }
     }
-}
 
 
 
@@ -335,15 +327,30 @@ class HVAC_Learning_Orchestrator extends IPSModule
             $this->WriteAttributeInteger('CurrentActionIndex', $actionIdx);
         }
     
-    // Nächstes Timerintervall setzen (Stage-Override möglich)
-    $stageInterval = (int)($currentStage['interval_ms'] ?? 60000);
-    $this->SetTimerInterval('CalibrationTimer', max(1000, $stageInterval));
-
-// Set next timer interval (per-stage override via 'interval_ms', else 60s)
-$nextInterval = (int)($currentStage['interval_ms'] ?? 60000);
-$this->SetTimerInterval('CalibrationTimer', max(1000, $nextInterval));
-}
-
+        // Set next timer interval (always use ZDM interval)
+        $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
+    }
+/**
+ * Get processing interval from linked ZDM module
+ */
+    private function getZDMProcessingInterval(): int
+    {
+        $zdmID = (int)$this->ReadPropertyInteger('ZoningManagerID');
+        if ($zdmID <= 0 || !IPS_InstanceExists($zdmID)) {
+            $this->LogMessage('ORCH: No ZDM instance linked, using default 60s', KL_WARNING);
+            return 60000; // fallback to 60 seconds in milliseconds
+        }
+        
+        try {
+            $intervalSec = (int)IPS_GetProperty($zdmID, 'TimerInterval');
+            $intervalMs = max(1000, $intervalSec * 1000); // convert to ms, minimum 1s
+            $this->LogMessage("ORCH: Using ZDM interval: {$intervalSec}s ({$intervalMs}ms)", KL_DEBUG);
+            return $intervalMs;
+        } catch (Exception $e) {
+            $this->LogMessage('ORCH: Failed to read ZDM interval, using default 60s: ' . $e->getMessage(), KL_WARNING);
+            return 60000;
+        }
+    }
     // ===== Plan helpers =====
 
     private function generateProposedPlan(int $zoningID, int $adaptiveID): array
@@ -562,8 +569,5 @@ $this->SetTimerInterval('CalibrationTimer', max(1000, $nextInterval));
 
     // ===== Public wrapper for timer (required by RegisterTimer) =====
 
-    public function RunNextStepPublic()
-    {
-        $this->RunNextStep();
-    }
+    
 }
