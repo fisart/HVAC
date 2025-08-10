@@ -1,5 +1,18 @@
 {
   "elements": [
+    { "type": "Label", "label": "--- Operating Mode ---" },
+    {
+      "type": "Select",
+      "name": "OperatingMode",
+      "caption": "Operating Mode",
+      "options": [
+        { "label": "Cooling", "value": 0 },
+        { "label": "Heating", "value": 1 },
+        { "label": "Auto/Cooperative", "value": 2 }
+      ],
+      "value": 2
+    },
+
     { "type": "Label", "label": "--- Core Module Links ---" },
     { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
     { "type": "SelectVariable", "name": "PowerOutputLink", "caption": "Power Output Link" },
