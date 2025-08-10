@@ -209,6 +209,7 @@ class adaptive_HVAC_control extends IPSModule
             return;
         }
         if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
+            $this->applyAction(0, 0);  // Wichtig: Ausgänge auf 0 setzen wenn AC inaktiv
             $this->log(3, 'ac_inactive_skip');
             return;
         }
