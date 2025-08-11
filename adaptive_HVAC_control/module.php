@@ -93,7 +93,6 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ApplyChanges()
     {
-        $this->log(0, 'ApplyChanges_START', []); 
         parent::ApplyChanges();
 
         // ---- one-time migration (no recursion) ----
@@ -137,7 +136,6 @@ class adaptive_HVAC_control extends IPSModule
         }
 
         $this->log(2, 'apply_changes', ['interval_ms' => $intervalMs]);
-        $this->log(0, 'ApplyChanges_END', []); 
     }
 
     // -------------------- Public APIs for Orchestrator/UI --------------------
