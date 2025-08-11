@@ -25,33 +25,16 @@
     { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Control (On/Off or Value)" },
     { "type": "SelectVariable", "name": "MainACPowerLink", "caption": "Main AC Power Control Link" },
     { "type": "SelectVariable", "name": "MainFanSpeedLink", "caption": "Main Fan Speed Control Link" },
+
     { "type": "Label", "label": "--- Standalone Mode Settings ---", "visible": "this.StandaloneMode" },
     { "type": "NumberSpinner", "name": "ConstantPower", "caption": "Constant Power (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
     { "type": "NumberSpinner", "name": "ConstantFanSpeed", "caption": "Constant Fan Speed (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
+
     { "type": "Label", "label": "--- Notabschaltung (Spulenschutz) ---" },
-    {
-      "type": "SelectVariable",
-      "name": "CoilTemperatureLink",
-      "caption": "Spulentemperatur-Sensor"
-    },
-    {
-      "type": "NumberSpinner",
-      "name": "EmergencyShutdownTemp",
-      "caption": "Abschalttemperatur (°C)",
-      "digits": 1,
-      "minimum": -5.0,
-      "maximum": 10.0,
-      "value": 1.0
-    },
-    {
-      "type": "NumberSpinner",
-      "name": "EmergencyRestartTemp",
-      "caption": "Wiedereinschalttemperatur (°C)",
-      "digits": 1,
-      "minimum": 0.0,
-      "maximum": 15.0,
-      "value": 5.0
-    },
+    { "type": "SelectVariable", "name": "CoilTemperatureLink", "caption": "Spulentemperatur-Sensor" },
+    { "type": "NumberSpinner", "name": "EmergencyShutdownTemp", "caption": "Abschalttemperatur (°C)", "digits": 1, "minimum": -5.0, "maximum": 10.0, "value": 1.0 },
+    { "type": "NumberSpinner", "name": "EmergencyRestartTemp", "caption": "Wiedereinschalttemperatur (°C)", "digits": 1, "minimum": 0.0, "maximum": 15.0, "value": 5.0 },
+
     { "type": "Label", "label": "--- Controlled Rooms ---" },
     {
       "type": "List",
@@ -62,42 +45,11 @@
       "delete": true,
       "sort": { "column": "name", "direction": "ascending" },
       "columns": [
-        {
-          "caption": "Room Name",
-          "name": "name",
-          "width": "150px",
-          "add": "New Room",
-          "edit": { "type": "ValidationTextBox" }
-        },
-        {
-          "caption": "Temp Sensor (IST)",
-          "name": "tempID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
-        {
-          "caption": "Target Temp (SOLL)",
-          "name": "targetID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
-        {
-          "caption": "Demand Output (to Adaptive Module)",
-          "name": "demandID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" },
-          "visible": "!this.StandaloneMode"
-        },
-        {
-          "caption": "Flap Control Variable",
-          "name": "flapID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
+        { "caption": "Room Name", "name": "name", "width": "150px", "add": "New Room", "edit": { "type": "ValidationTextBox" } },
+        { "caption": "Temp Sensor (IST)", "name": "tempID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+        { "caption": "Target Temp (SOLL)", "name": "targetID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+        { "caption": "Demand Output (to Adaptive Module)", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" }, "visible": "!this.StandaloneMode" },
+        { "caption": "Flap Control Variable", "name": "flapID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
         {
           "caption": "Flap Type",
           "name": "flapType",
@@ -111,84 +63,31 @@
             ]
           }
         },
-        {
-          "caption": "Value for OPEN (boolean)",
-          "name": "flapOpenValue",
-          "width": "120px",
-          "add": "true",
-          "edit": { "type": "ValidationTextBox" },
-          "visible": "this.flapType === 'boolean'"
-        },
-        {
-          "caption": "Value for CLOSED (boolean)",
-          "name": "flapClosedValue",
-          "width": "120px",
-          "add": "false",
-          "edit": { "type": "ValidationTextBox" },
-          "visible": "this.flapType === 'boolean'"
-        },
-        {
-          "caption": "Open % (linear)",
-          "name": "flapOpenLinear",
-          "width": "120px",
-          "add": 100,
-          "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 },
-          "visible": "this.flapType === 'linear'"
-        },
-        {
-          "caption": "Closed % (linear)",
-          "name": "flapClosedLinear",
-          "width": "120px",
-          "add": 0,
-          "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 },
-          "visible": "this.flapType === 'linear'"
-        },
-        {
-          "caption": "AC Mode Input (Air_Soll_Status)",
-          "name": "airSollStatusID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
-        {
-          "caption": "Phase Info Output (Cooling_Phase_Info)",
-          "name": "coolingPhaseInfoID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectVariable" }
-        },
-        {
-          "caption": "Window/Door Category",
-          "name": "windowCatID",
-          "width": "200px",
-          "add": 0,
-          "edit": { "type": "SelectCategory" }
-        }
+        { "caption": "Value for OPEN (boolean)", "name": "flapOpenValue", "width": "120px", "add": "true", "edit": { "type": "ValidationTextBox" }, "visible": "this.flapType === 'boolean'" },
+        { "caption": "Value for CLOSED (boolean)", "name": "flapClosedValue", "width": "120px", "add": "false", "edit": { "type": "ValidationTextBox" }, "visible": "this.flapType === 'boolean'" },
+        { "caption": "Open % (linear)", "name": "flapOpenLinear", "width": "120px", "add": 100, "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 }, "visible": "this.flapType === 'linear'" },
+        { "caption": "Closed % (linear)", "name": "flapClosedLinear", "width": "120px", "add": 0, "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 }, "visible": "this.flapType === 'linear'" },
+        { "caption": "AC Mode Input (Air_Soll_Status)", "name": "airSollStatusID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+        { "caption": "Phase Info Output (Cooling_Phase_Info)", "name": "coolingPhaseInfoID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+        { "caption": "Window/Door Category", "name": "windowCatID", "width": "200px", "add": 0, "edit": { "type": "SelectCategory" } }
       ]
     },
 
     { "type": "Label", "label": "--- Status ---" },
+    { "type": "Label", "label": "Override aktiv (nur Anzeige):", "bold": true },
+    { "type": "Label", "name": "OverrideActive", "caption": "—", "visible": true }
+  ],
+
+  "actions": [
     {
-      "type": "Label",
-      "label": "Override active (read-only):",
-      "bold": true
-    },
-    {
-      "type": "Label",
-      "name": "OverrideActive",
-      "caption": " ",
-      "visible": true
+      "type": "Button",
+      "caption": "Run zoning now",
+      "onClick": "ZDM_ProcessZoning($id);"
     }
   ],
-  "actions": [
-  {
-    "type": "Button",
-    "caption": "Run zoning now",
-    "onClick": "ZDM_ProcessZoning($id);"
-  }
-],
-{ "type": "Label", "label": "--- Status ---" },
-{ "type": "Label", "label": "Override aktiv (nur Anzeige):", "bold": true },
-{ "type": "Label", "name": "OverrideActiveValue", "label": "—" }
 
+  "status": [
+    { "code": 102, "icon": "active", "caption": "OK" },
+    { "code": 202, "icon": "error", "caption": "Configuration incomplete" }
+  ]
 }
