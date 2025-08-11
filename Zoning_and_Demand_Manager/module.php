@@ -101,25 +101,26 @@ class Zoning_and_Demand_Manager extends IPSModule
             return;
         }
 
-        if (!$this.guardEnter()) { $this.log(1, 'guard_timeout'); return; }
+        // HIER IST DIE KORREKTUR: `$this->guardEnter()` statt `$this.guardEnter()`
+        if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
-            $override = GetValue($this.GetIDForIdent('OverrideActive'));
+            $override = GetValue($this->GetIDForIdent('OverrideActive'));
             if ($override) {
-                $this.log(2, 'override_active_mode_process');
-                $this.GetAggregates();
+                $this->log(2, 'override_active_mode_process');
+                $this->GetAggregates();
                 return;
             }
 
-            if ($this.isBlockedByHeatingOrVentilation()) {
-                $this.log(2, 'blocked_by_heating_or_ventilation');
-                $this.systemOff();
-                $this.applyAllFlaps(false);
+            if ($this->isBlockedByHeatingOrVentilation()) {
+                $this->log(2, 'blocked_by_heating_or_ventilation');
+                $this->systemOff();
+                $this->applyAllFlaps(false);
                 return;
             }
 
-            $rooms = $this.getRooms();
+            $rooms = $this->getRooms();
             if (!$rooms) {
-                $this.log(2, 'no_rooms_configured');
+                $this->log(2, 'no_rooms_configured');
                 return;
             }
 
@@ -129,35 +130,33 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $name = (string)($room['name'] ?? 'room');
                 $coolingPhaseVarID = (int)($room['coolingPhaseInfoID'] ?? 0);
                 $airSollStatusVarID = (int)($room['airSollStatusID'] ?? 0);
-                // NEU: Die demandID wird wieder korrekt berücksichtigt
                 $demandVarID = (int)($room['demandID'] ?? 0);
 
                 // 1) Fenster-Check (hat immer Vorrang)
-                if ($this.isWindowOpenStable($room)) {
-                    $this.setFlap($room, false);
-                    if ($coolingPhaseVarID > 0) $this.writeVarSmart($coolingPhaseVarID, 3); // On Hold Window Open
-                    // NEU: Auch die demandID auf 0 setzen
-                    if ($demandVarID > 0) $this.writeVarSmart($demandVarID, 0);
-                    $this.log(3, 'room_window_open_flap_closed', ['room'=>$name]);
+                if ($this->isWindowOpenStable($room)) {
+                    $this->setFlap($room, false);
+                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 3); // On Hold Window Open
+                    if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 0);
+                    $this->log(3, 'room_window_open_flap_closed', ['room'=>$name]);
                     continue;
                 }
 
                 // 2) PRIMÄRE LOGIK: Prüfe den vom Benutzer gesetzten "Air Soll Status"
-                $roomMode = ($airSollStatusVarID > 0) ? $this.GetInt($airSollStatusVarID) : 3; // Fallback auf AUTO
+                $roomMode = ($airSollStatusVarID > 0) ? $this->GetInt($airSollStatusVarID) : 3; // Fallback auf AUTO
                 $roomHasDemand = false;
 
                 if ($roomMode === 2) { // AC ON (Einmalige Anforderung)
-                    $ist = $this.GetFloat((int)($room['tempID'] ?? 0));
-                    $soll = $this.GetFloat((int)($room['targetID'] ?? 0));
+                    $ist = $this->GetFloat((int)($room['tempID'] ?? 0));
+                    $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
                     if (is_finite($ist) && is_finite($soll) && $ist > $soll) {
                         $roomHasDemand = true;
                     } else {
-                        if ($airSollStatusVarID > 0) $this.writeVarSmart($airSollStatusVarID, 1); // AC OFF
+                        if ($airSollStatusVarID > 0) $this->writeVarSmart($airSollStatusVarID, 1); // AC OFF
                     }
                 } elseif ($roomMode === 3) { // AC AUTO (Automatische Regelung)
-                    $ist = $this.GetFloat((int)($room['tempID'] ?? 0));
-                    $soll = $this.GetFloat((int)($room['targetID'] ?? 0));
-                    $hyst = (float)$this.ReadPropertyFloat('Hysteresis');
+                    $ist = $this->GetFloat((int)($room['tempID'] ?? 0));
+                    $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
+                    $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
                     if (is_finite($ist) && is_finite($soll) && ($ist - $soll) > $hyst) {
                         $roomHasDemand = true;
                     }
@@ -165,41 +164,37 @@ class Zoning_and_Demand_Manager extends IPSModule
 
                 // 3) FINALE ENTSCHEIDUNG für diesen Raum
                 if ($roomHasDemand) {
-                    $this.setFlap($room, true);
+                    $this->setFlap($room, true);
                     $anyDemand = true;
-                    // NEU: Setze die demandID auf 3, um dem Adaptive-Modul starken Bedarf zu signalisieren
-                    if ($demandVarID > 0) $this.writeVarSmart($demandVarID, 3);
-                    if ($coolingPhaseVarID > 0) $this.writeVarSmart($coolingPhaseVarID, 2); // Automatic Cooling ACTIVE
-                    $this.log(2, 'room_demand_on', ['room' => $name, 'mode' => $roomMode]);
+                    if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 3);
+                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 2); // Automatic Cooling ACTIVE
+                    $this->log(2, 'room_demand_on', ['room' => $name, 'mode' => $roomMode]);
                 } else {
-                    $this.setFlap($room, false);
-                    // NEU: Setze die demandID auf 0 (kein Bedarf)
-                    if ($demandVarID > 0) $this.writeVarSmart($demandVarID, 0);
-                    if ($coolingPhaseVarID > 0) $this.writeVarSmart($coolingPhaseVarID, 0); // Ready for Cooling
-                    $this.log(2, 'room_demand_off', ['room' => $name, 'mode' => $roomMode]);
+                    $this->setFlap($room, false);
+                    if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 0);
+                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 0); // Ready for Cooling
+                    $this->log(2, 'room_demand_off', ['room' => $name, 'mode' => $roomMode]);
                 }
             }
 
             // --- Der Rest der Funktion bleibt unverändert ---
-            $this.log(2, 'DECIDE_SYSTEM', ['anyDemand' => $anyDemand]);
+            $this->log(2, 'DECIDE_SYSTEM', ['anyDemand' => $anyDemand]);
             if ($anyDemand) {
-                if ($this.ReadPropertyBoolean('StandaloneMode')) {
-                    $this.systemOnStandalone();
+                if ($this->ReadPropertyBoolean('StandaloneMode')) {
+                    $this->systemOnStandalone();
                 } else {
-                    // Im kooperativen Modus wird die Anlage nur eingeschaltet.
-                    // Das Adaptive-Modul entscheidet dann anhand der demandID-Werte die Leistung.
-                    $this.systemSetPercent(1, 1);
+                    $this->systemSetPercent(1, 1);
                 }
             } else {
-                $this.systemOff();
+                $this->systemOff();
             }
 
-            $this.GetAggregates();
+            $this->GetAggregates();
 
         } finally {
-            $this.guardLeave();
+            $this->guardLeave();
         }
-    }  
+    }
 
 
     // ---------- Public (Orchestrator APIs) ----------
