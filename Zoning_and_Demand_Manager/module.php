@@ -560,6 +560,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             case 1: // Integer
                 // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
                 if (GetValueInteger($varID) !== (int)$value) {
+                    $this->log(1, 'Error cant write var', ['varID' => $varID, 'varType' => $varType]);
                     SetValueInteger($varID, (int)$value);
                 }
                 break;
