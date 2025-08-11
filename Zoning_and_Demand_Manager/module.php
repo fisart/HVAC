@@ -515,41 +515,59 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     private function writeVarSmart(int $varID, $value): void
     {
-        if ($varID <= 0) return;
+        if ($varID <= 0 || !IPS_VariableExists($varID)) {
+            return;
+        }
 
         $vinfo = IPS_GetVariable($varID);
-        $vt = $vinfo['VariableType'] ?? -1;
-        $hasAction = ($vinfo['VariableAction'] ?? 0) !== 0;
+        $varType = $vinfo['VariableType'] ?? -1;
+        $hasAction = ($vinfo['VariableAction'] ?? 0) !== 0 || ($vinfo['VariableCustomAction'] ?? 0) !== 0;
 
-        // Instrumentation
-        $this->log(3, 'writeVarSmart', [
+        $this->log(3, 'writeVarSmart_debug', [
             'varID'     => $varID,
-            'varType'   => $vt,
+            'varType'   => $varType,
             'hasAction' => $hasAction,
             'value'     => $value
         ]);
 
-        switch ($vt) {
-            case 0: // boolean
+        // Wenn die Variable eine Aktion hat, verwenden wir immer RequestAction.
+        // Symcon kümmert sich dann um die korrekte Typumwandlung für das Aktionsskript.
+        if ($hasAction) {
+            $this->log(3, 'writeVarSmart_execute', ['method' => 'RequestAction', 'varID' => $varID, 'value' => $value]);
+            RequestAction($varID, $value);
+            return; // Wichtig: Danach die Funktion beenden.
+        }
+
+        // Wenn KEINE Aktion vorhanden ist, verwenden wir die typspezifischen SetValue-Befehle.
+        $this->log(3, 'writeVarSmart_execute', ['method' => 'SetValue (type-specific)', 'varID' => $varID, 'value' => $value]);
+
+        switch ($varType) {
+            case 0: // Boolean
+                $finalValue = $value;
                 if (is_numeric($value)) {
-                    $value = ((int)$value) >= 1;
-                } elseif (!is_bool($value)) {
-                    $value = (string)$value === 'true';
+                    $finalValue = ((int)$value) >= 1;
+                } elseif (is_string($value)) {
+                    $finalValue = in_array(strtolower((string)$value), ['true', '1', 'on'], true);
                 }
-                @RequestAction($varID, (bool)$value);
+                SetValueBoolean($varID, (bool)$finalValue);
                 break;
-            case 1: // integer
-                @RequestAction($varID, (int)$value);
+
+            case 1: // Integer
+                SetValueInteger($varID, (int)$value);
                 break;
-            case 2: // float
-                @RequestAction($varID, (float)$value);
+
+            case 2: // Float
+                SetValueFloat($varID, (float)$value);
                 break;
-            case 3: // string
-                @RequestAction($varID, (string)$value);
+
+            case 3: // String
+                SetValueString($varID, (string)$value);
                 break;
+
             default:
-                // Fallback: direkter SetValue (wenn kein Action-Handler)
-                @SetValue($varID, $value);
+                // Fallback für unbekannte Typen (sollte nie passieren)
+                $this->log(1, 'writeVarSmart_unknown_type', ['varID' => $varID, 'varType' => $varType]);
+                SetValue($varID, $value);
                 break;
         }
     }
