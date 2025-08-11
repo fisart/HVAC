@@ -93,51 +93,20 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ApplyChanges()
     {
-        // === DEBUG START ===
-        $this->log(0, 'ApplyChanges_START', []);
-        parent::ApplyChanges(); // Wichtig: Zuerst aufrufen
-        $this->log(0, 'ApplyChanges_After_Parent', []);
+        parent::ApplyChanges();
 
-        // Wir lesen den Wert SOFORT nach parent::ApplyChanges()
-        $powerIdAfterParent = $this->ReadPropertyInteger('PowerOutputLink');
-        $this->log(0, 'ApplyChanges_Read_Immediately', ['PowerID_After_Parent' => $powerIdAfterParent]);
+        $this->log(0, 'ApplyChanges_Final_Version_Running', [
+            'PowerID_Check' => $this->ReadPropertyInteger('PowerOutputLink')
+        ]);
 
-        // ---- one-time migration (no recursion) ----
-        $migrated = (bool)$this->ReadAttributeBoolean('MigratedNaming');
-        if (!$migrated) {
-            $this->log(0, 'ApplyChanges_Entering_Migration', []);
-            $changed = false;
-
-            // ... der gesamte Migrations-Code ...
-            
-            if ($changed) {
-                $this->WriteAttributeBoolean('MigratedNaming', true);
-                $this->log(0, 'ApplyChanges_Migration_ATTEMPT_RELOAD', []);
-                @IPS_ApplyChanges($this->InstanceID); 
-                return;
-            } else {
-                $this->WriteAttributeBoolean('MigratedNaming', true);
-                $this->log(0, 'ApplyChanges_Migration_SKIPPED', []);
-            }
-        }
-
-        // ---- normal ApplyChanges flow ----
-        $this->log(0, 'ApplyChanges_Normal_Flow_START', []);
         $this->SetStatus(102);
         $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
         $this->SetTimerInterval('LearningTimer', $intervalMs);
 
-        // Letzter Check vor dem Ende
-        $powerIdAtEnd = $this->ReadPropertyInteger('PowerOutputLink');
-        $this->log(0, 'ApplyChanges_Final_Check', ['PowerID_At_End' => $powerIdAtEnd]);
-
         if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
             $this->initExploration();
         }
-
-        $this->log(2, 'apply_changes', ['interval_ms' => $intervalMs]);
-        $this->log(0, 'ApplyChanges_END', []); 
-    }
+    }    
     // -------------------- Public APIs for Orchestrator/UI --------------------
 
     /**
