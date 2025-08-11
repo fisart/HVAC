@@ -185,8 +185,22 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
+public function ProcessLearning(): void
+{
+    // Wir loggen den Zustand bei jedem einzelnen Aufruf mit höchster Priorität.
+    $this->log(0, 'ISOLATION_TEST_RUN', [
+        'PowerOutputLink' => $this->ReadPropertyInteger('PowerOutputLink'),
+        'FanOutputLink'   => $this->ReadPropertyInteger('FanOutputLink'),
+        'ACActiveLink'    => $this->ReadPropertyInteger('ACActiveLink'),
+        'Timestamp'       => microtime(true)
+    ]);
 
-    public function ProcessLearning(): void
+    // WIR BEENDEN DIE FUNKTION HIER SOFORT.
+    // Keine Logik, keine Interaktion mit ZDM, kein applyAction.
+    return;
+}
+    
+    public function ProcessLearningalt(): void
     {
         // Debug: Properties beim Start loggen
         $this->log(3, 'process_learning_start', [
