@@ -521,69 +521,41 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $vinfo = IPS_GetVariable($varID);
         $varType = $vinfo['VariableType'] ?? -1;
-        
-        // PRÄZISERE PRÜFUNG: Wir verwenden RequestAction NUR, wenn ein EIGENES Aktionsskript existiert.
-        $hasCustomAction = ($vinfo['VariableCustomAction'] ?? 0) !== 0;
 
-        $this->log(3, 'writeVarSmart_debug', [
-            'varID'           => $varID,
-            'varType'         => $varType,
-            'hasCustomAction' => $hasCustomAction, // Logge das Ergebnis der neuen Prüfung
-            'value'           => $value
-        ]);
-
-        // Wenn ein eigenes Skript da ist, soll es die Arbeit machen.
-        if ($hasCustomAction) {
-            $this->log(3, 'writeVarSmart_execute', ['method' => 'RequestAction', 'varID' => $varID, 'value' => $value]);
-            RequestAction($varID, $value);
-            return;
-        }
-
-        // In ALLEN ANDEREN Fällen setzen wir den Wert direkt und typsicher.
-        // Das deckt Statusvariablen UND Variablen mit reinen Anzeige-Profilen ab.
-        $this->log(3, 'writeVarSmart_execute', ['method' => 'SetValue (type-specific)', 'varID' => $varID, 'value' => $value]);
-
+        // Wir konvertieren den Wert in den Zieldatentyp, bevor wir ihn senden.
+        $finalValue = $value;
         switch ($varType) {
             case 0: // Boolean
-                $finalValue = $value;
                 if (is_numeric($value)) {
-                    $finalValue = ((int)$value) >= 1;
+                    $finalValue = ((int)$value) != 0;
                 } elseif (is_string($value)) {
                     $finalValue = in_array(strtolower((string)$value), ['true', '1', 'on'], true);
                 }
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueBoolean($varID) !== (bool)$finalValue) {
-                    SetValueBoolean($varID, (bool)$finalValue);
-                }
+                $finalValue = (bool)$finalValue;
                 break;
-
             case 1: // Integer
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueInteger($varID) !== (int)$value) {
-                    $this->log(1, 'Error cant write var', ['varID' => $varID, 'varType' => $varType]);
-                    SetValueInteger($varID, (int)$value);
-                }
+                $finalValue = (int)$value;
                 break;
-
             case 2: // Float
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueFloat($varID) !== (float)$value) {
-                    SetValueFloat($varID, (float)$value);
-                }
+                $finalValue = (float)$value;
                 break;
-
             case 3: // String
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueString($varID) !== (string)$value) {
-                    SetValueString($varID, (string)$value);
-                }
-                break;
-
-            default:
-                $this->log(1, 'writeVarSmart_unknown_type', ['varID' => $varID, 'varType' => $varType]);
-                SetValue($varID, $value);
+                $finalValue = (string)$value;
                 break;
         }
+
+        // Logge die Absicht, bevor der Befehl gesendet wird.
+        $this->log(3, 'writeVarSmart_execute_requestaction', [
+            'varID'          => $varID,
+            'targetVarType'  => $varType,
+            'originalValue'  => $value,
+            'finalValueSent' => $finalValue
+        ]);
+
+        // Führe IMMER RequestAction aus.
+        // Ein @-Zeichen ist hier sinnvoll, um den Lauf nicht zu stoppen,
+        // falls eine Variable temporär keine Aktion hat. Der Fehler wird im Log sichtbar.
+        RequestAction($varID, $finalValue);
     }
 
     // ---------- Intern: Fenster/Door (Debounce) ----------
