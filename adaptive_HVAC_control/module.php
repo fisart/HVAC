@@ -579,16 +579,28 @@ class adaptive_HVAC_control extends IPSModule
 
     // -------------------- Actions / Outputs --------------------
 
+    /**
+     * Wendet die berechneten Leistungs- und Lüfterwerte auf die Ausgänge an.
+     * Diese Funktion ist der zentrale Punkt, um die Hardware zu steuern.
+     * Sie wird von ProcessLearning() mit zwei Ganzzahlen aufgerufen.
+     */
     private function applyAction(int $p, int $f): void
     {
+        // Grund: Werte auf 0-100 begrenzen, um ungültige Zustände zu vermeiden.
         $p = max(0, min(100, $p));
         $f = max(0, min(100, $f));
-        $powerVarID = $this->ReadPropertyInteger('PowerOutputLink');
-        $fanVarID = $this->ReadPropertyInteger('FanOutputLink');
-        $this->setPercent($powerVarID, $p);
-        $this->setPercent($fanVarID, $f);
+
+        // Grund: Ruft die dedizierte Funktion für die Leistungssteuerung auf.
+        $this->setPercent($p);
+
+        // Grund: Ruft die dedizierte Funktion für die Lüftersteuerung auf.
+        $this->setFanSpeed($f);
+
+        // Grund: Speichert die zuletzt gesetzte Aktion für die Delta-Berechnung.
         $this->WriteAttributeString('LastAction', $p.':'.$f);
-        $this->log(2, 'apply_action', ['p'=>$p,'f'=>$f, 'powerVarID'=>$powerVarID, 'fanVarID'=>$fanVarID]);
+
+        // Grund: Loggt die durchgeführte Aktion. Dieser Log-Aufruf ist bereits korrekt.
+        $this->log(2, 'apply_action', ['p'=>$p, 'f'=>$f]);
     }
 
     private function limitDeltas(int $p, int $f): array
@@ -605,22 +617,26 @@ class adaptive_HVAC_control extends IPSModule
 
     public function setPercent(int $val)
     {
-        $this->log('ADHVAC', 5, 'setPercent', ['val' => $val]);
+        // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+        $this->log(3, 'setPercent', ['val' => $val]);
         $linkID = $this->ReadPropertyInteger('PowerOutputLink');
 
         if ($linkID == 0) {
-            $this->log('ADHVAC', 1, 'setPercent_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'PowerOutputLink not configured.']);
+            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+            $this->log(1, 'setPercent_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'PowerOutputLink not configured.']);
             return;
         }
 
         $targetVarID = @IPS_GetLink($linkID)['targetID'];
         if (!$targetVarID || !IPS_VariableExists($targetVarID)) {
-            $this->log('ADHVAC', 1, 'setPercent_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of PowerOutputLink is invalid.']);
+            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+            $this->log(1, 'setPercent_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of PowerOutputLink is invalid.']);
             return;
         }
 
         if (GetValue($targetVarID) != $val) {
-            $this->log('ADHVAC', 5, 'RequestAction', ['varID' => $targetVarID, 'val' => $val]);
+            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+            $this->log(3, 'RequestAction_Power', ['varID' => $targetVarID, 'val' => $val]);
             RequestAction($targetVarID, $val);
         }
     }
@@ -630,25 +646,26 @@ class adaptive_HVAC_control extends IPSModule
  */
     public function setFanSpeed(int $val)
     {
-        // Use the new, accurate name in the logs
-        $this->log('ADHVAC', 5, 'setFanSpeed', ['val' => $val]);
+        // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+        $this->log(3, 'setFanSpeed', ['val' => $val]);
         $linkID = $this->ReadPropertyInteger('FanOutputLink');
 
         if ($linkID == 0) {
-            // Use the new, accurate name in the error event
-            $this->log('ADHVAC', 1, 'setFanSpeed_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'FanOutputLink not configured.']);
+            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'FanOutputLink not configured.']);
             return;
         }
 
         $targetVarID = @IPS_GetLink($linkID)['targetID'];
         if (!$targetVarID || !IPS_VariableExists($targetVarID)) {
-            // Use the new, accurate name in the error event
-            $this->log('ADHVAC', 1, 'setFanSpeed_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of FanOutputLink is invalid.']);
+            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of FanOutputLink is invalid.']);
             return;
         }
 
         if (GetValue($targetVarID) != $val) {
-            $this->log('ADHVAC', 5, 'RequestAction', ['varID' => $targetVarID, 'val' => $val]);
+            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+            $this->log(3, 'RequestAction_Fan', ['varID' => $targetVarID, 'val' => $val]);
             RequestAction($targetVarID, $val);
         }
     }
