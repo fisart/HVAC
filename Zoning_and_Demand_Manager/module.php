@@ -34,7 +34,8 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('VentilationActiveLink', 0);
         $this->RegisterPropertyInteger('MainACOnOffLink', 0);     // bool oder integer (0..100)
         $this->RegisterPropertyInteger('MainFanControlLink', 0);  // bool oder integer (0..100)
-
+        $this->RegisterPropertyInteger('MainACPowerLink', 0);
+        $this->RegisterPropertyInteger('MainFanSpeedLink', 0);
         // Standalone-Konstanten (optional)
         $this->RegisterPropertyInteger('ConstantPower', 80);      // 0..100
         $this->RegisterPropertyInteger('ConstantFanSpeed', 80);   // 0..100
@@ -490,22 +491,37 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     private function systemSetPercent(int $power, int $fan): void
     {
+        // Werte auf 0-100 begrenzen (bleibt gleich)
         $power = $this->clamp($power, 0, 100);
         $fan   = $this->clamp($fan,   0, 100);
 
-        $acVar  = (int)$this->ReadPropertyInteger('MainACOnOffLink');
-        $fanVar = (int)$this->ReadPropertyInteger('MainFanControlLink');
+        // Lese ALLE vier relevanten Variablen-IDs aus der Konfiguration
+        $acSwitchVar  = (int)$this->ReadPropertyInteger('MainACOnOffLink');
+        $fanSwitchVar = (int)$this->ReadPropertyInteger('MainFanControlLink');
+        $acPowerVar   = (int)$this->ReadPropertyInteger('MainACPowerLink');
+        $fanSpeedVar  = (int)$this->ReadPropertyInteger('MainFanSpeedLink');
 
-        // Instrumentation
-        $this->log(3, 'system_set_percent', [
-            'power' => $power,
-            'fan'   => $fan,
-            'acVar' => $acVar,
-            'fanVar'=> $fanVar
+        // Bestimme den Ein/Aus-Zustand. AN, wenn Leistung > 0.
+        $isAcOn  = ($power > 0);
+        $isFanOn = ($fan > 0);
+
+        // Logge die vollständige Absicht
+        $this->log(3, 'system_set_percent_extended', [
+            'power_val' => $power,
+            'fan_val'   => $fan,
+            'acSwitchID'  => $acSwitchVar,
+            'fanSwitchID' => $fanSwitchVar,
+            'acPowerID'   => $acPowerVar,
+            'fanSpeedID'  => $fanSpeedVar,
+            'computed_isAcOn'  => $isAcOn,
+            'computed_isFanOn' => $isFanOn
         ]);
 
-        if ($acVar > 0)  $this->writeVarSmart($acVar,  $power);
-        if ($fanVar > 0) $this->writeVarSmart($fanVar, $fan);
+        // Sende die Befehle
+        if ($acSwitchVar > 0)  $this->writeVarSmart($acSwitchVar,  $isAcOn);  // Sendet true/false
+        if ($acPowerVar > 0)   $this->writeVarSmart($acPowerVar,   $power);   // Sendet 0-100
+        if ($fanSwitchVar > 0) $this->writeVarSmart($fanSwitchVar, $isFanOn); // Sendet true/false
+        if ($fanSpeedVar > 0)  $this->writeVarSmart($fanSpeedVar,  $fan);     // Sendet 0-100
     }
 
     private function writeVarSmart(int $varID, $value): void

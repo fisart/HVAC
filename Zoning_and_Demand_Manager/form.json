@@ -23,7 +23,8 @@
     { "type": "SelectVariable", "name": "VentilationActiveLink", "caption": "Ventilation Active Link (disables cooling)" },
     { "type": "SelectVariable", "name": "MainACOnOffLink", "caption": "Main AC Unit (On/Off or Value)" },
     { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Control (On/Off or Value)" },
-
+    { "type": "SelectVariable", "name": "MainACPowerLink", "caption": "Main AC Power Control Link" },
+    { "type": "SelectVariable", "name": "MainFanSpeedLink", "caption": "Main Fan Speed Control Link" },
     { "type": "Label", "label": "--- Standalone Mode Settings ---", "visible": "this.StandaloneMode" },
     { "type": "NumberSpinner", "name": "ConstantPower", "caption": "Constant Power (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
     { "type": "NumberSpinner", "name": "ConstantFanSpeed", "caption": "Constant Fan Speed (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
