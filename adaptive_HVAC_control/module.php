@@ -566,21 +566,14 @@ class adaptive_HVAC_control extends IPSModule
      */
     private function applyAction(int $p, int $f): void
     {
-        // Grund: Werte auf 0-100 begrenzen, um ungültige Zustände zu vermeiden.
         $p = max(0, min(100, $p));
         $f = max(0, min(100, $f));
 
-        // Grund: Ruft die dedizierte Funktion für die Leistungssteuerung auf.
-        $this->setPercent($p);
+        // Leite den Befehl direkt an die neue zentrale Funktion weiter.
+        $this->commandZDM($p, $f);
 
-        // Grund: Ruft die dedizierte Funktion für die Lüftersteuerung auf.
-        $this->setFanSpeed($f);
-
-        // Grund: Speichert die zuletzt gesetzte Aktion für die Delta-Berechnung.
         $this->WriteAttributeString('LastAction', $p.':'.$f);
-
-        // Grund: Loggt die durchgeführte Aktion. Dieser Log-Aufruf ist bereits korrekt.
-        $this->log(2, 'apply_action', ['p'=>$p, 'f'=>$f]);
+        $this->log(2, 'apply_action', ['p' => $p, 'f' => $f]);
     }
 
     private function limitDeltas(int $p, int $f): array
@@ -597,60 +590,74 @@ class adaptive_HVAC_control extends IPSModule
 
     public function setPercent(int $val)
     {
-        // Grund: Log-Aufruf ist korrekt.
-        $this->log(3, 'setPercent', ['val' => $val]);
+        $this->log(3, 'setPercent_redirect', ['val' => $val]);
 
-        // Grund für Änderung: Die Eigenschaft enthält direkt die Variablen-ID.
-        // Die Variable heißt nun $targetVarID, um Verwirrung zu vermeiden.
-        $targetVarID = $this->ReadPropertyInteger('PowerOutputLink');
-
-        // Grund für Änderung: Die Prüfung erfolgt nun direkt auf die Variablen-ID.
-        if ($targetVarID == 0) {
-            $this->log(1, 'setPercent_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'PowerOutputLink variable not configured.']);
-            return;
+        // Lese den ZULETZT bekannten Fan-Wert aus dem Attribut.
+        $lastAction = $this->ReadAttributeString('LastAction');
+        if (preg_match('/^(\d+):(\d+)$/', $lastAction, $m)) {
+            $lastFan = (int)$m[2];
+        } else {
+            $lastFan = 0; // Fallback, falls Attribut leer ist
         }
 
-        // Grund für Änderung: Die unnötige IPS_GetLink-Logik wurde entfernt.
-        // Wir prüfen nur noch, ob die direkt zugewiesene Variable existiert.
-        if (!IPS_VariableExists($targetVarID)) {
-            $this->log(1, 'setPercent_invalid_var', ['varID' => $targetVarID, 'val' => $val, 'reason' => 'Variable from PowerOutputLink does not exist.']);
-            return;
-        }
-
-        if (GetValue($targetVarID) != $val) {
-            $this->log(3, 'RequestAction_Power', ['varID' => $targetVarID, 'val' => $val]);
-            RequestAction($targetVarID, $val);
-        }
+        // Leite den Befehl an die neue, zentrale Funktion weiter.
+        // Wir setzen den neuen Power-Wert und behalten den letzten Fan-Wert bei.
+        $this->commandZDM($val, $lastFan);
     }
+
+
     /**
  * Sets the fan speed percentage on the linked output variable.
  */
     public function setFanSpeed(int $val)
     {
-        // Grund: Log-Aufruf ist korrekt.
-        $this->log(3, 'setFanSpeed', ['val' => $val]);
+        $this->log(3, 'setFanSpeed_redirect', ['val' => $val]);
 
-        // Grund für Änderung: Die Eigenschaft enthält direkt die Variablen-ID.
-        $targetVarID = $this->ReadPropertyInteger('FanOutputLink');
+        // Lese den ZULETZT bekannten Power-Wert aus dem Attribut.
+        $lastAction = $this->ReadAttributeString('LastAction');
+        if (preg_match('/^(\d+):(\d+)$/', $lastAction, $m)) {
+            $lastPower = (int)$m[1];
+        } else {
+            $lastPower = 0; // Fallback
+        }
 
-        // Grund für Änderung: Die Prüfung erfolgt nun direkt auf die Variablen-ID.
-        if ($targetVarID == 0) {
-            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'FanOutputLink variable not configured.']);
+        // Leite den Befehl an die neue, zentrale Funktion weiter.
+        // Wir behalten den letzten Power-Wert bei und setzen den neuen Fan-Wert.
+        $this->commandZDM($lastPower, $val);
+    }
+
+    private function commandZDM(int $power, int $fan): void
+    {
+        $zdm_id = (int)$this->ReadPropertyInteger('ZDM_InstanceID');
+
+        if ($zdm_id <= 0 || !@IPS_InstanceExists($zdm_id)) {
+            $this->log(1, 'command_zdm_failed', ['reason' => 'ZDM_InstanceID not configured or invalid', 'p' => $power, 'f' => $fan]);
+            return;
+        }
+        if (!function_exists('ZDM_CommandSystem')) {
+            $this->log(1, 'command_zdm_failed', ['reason' => 'ZDM_CommandSystem() API not available', 'zdm_id' => $zdm_id]);
             return;
         }
 
-        // Grund für Änderung: Die unnötige IPS_GetLink-Logik wurde entfernt.
-        // Wir prüfen nur noch, ob die direkt zugewiesene Variable existiert.
-        if (!IPS_VariableExists($targetVarID)) {
-            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => $targetVarID, 'val' => $val, 'reason' => 'Variable from FanOutputLink does not exist.']);
-            return;
-        }
+        try {
+            $this->log(3, 'command_zdm_sending', ['zdm_id' => $zdm_id, 'p' => $power, 'f' => $fan]);
+            
+            // --- KEIN @-Zeichen mehr ---
+            ZDM_CommandSystem($zdm_id, $power, $fan); 
 
-        if (GetValue($targetVarID) != $val) {
-            $this->log(3, 'RequestAction_Fan', ['varID' => $targetVarID, 'val' => $val]);
-            RequestAction($targetVarID, $val);
+            $this->log(3, 'command_zdm_success', ['zdm_id' => $zdm_id, 'p' => $power, 'f' => $fan]);
+
+        } catch (Exception $e) {
+            // --- HIER FANGEN WIR DEN FEHLER AB ---
+            $this->log(0, 'command_zdm_error', [
+                'zdm_id' => $zdm_id,
+                'p' => $power,
+                'f' => $fan,
+                'error_message' => $e->getMessage() // Die exakte Fehlermeldung aus dem ZDM
+            ]);
         }
     }
+
     // -------------------- Allowed Actions --------------------
 
     private function getAllowedActionPairs(): array
