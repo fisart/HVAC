@@ -647,29 +647,55 @@ class Zoning_and_Demand_Manager extends IPSModule
     private function isWindowOpenRaw(array $room): bool
     {
         $catID = (int)($room['windowCatID'] ?? 0);
+        $name  = (string)($room['name'] ?? 'room');
+
         if ($catID <= 0 || !IPS_CategoryExists($catID)) {
+            $this->log(2, 'win_raw_no_category', ['room'=>$name, 'catID'=>$catID]);
             return false;
         }
 
-        foreach ($this->flattenCategoryVars($catID) as $vid) {
+        $this->log(3, 'win_cat_scan_start', ['room'=>$name, 'catID'=>$catID]);
+
+        $vids = $this->flattenCategoryVars($catID); // resolves links + nested cats
+        if (empty($vids)) {
+            $this->log(2, 'win_cat_no_vars_found', ['room'=>$name, 'catID'=>$catID]);
+            return false;
+        }
+        $this->log(3, 'win_cat_vars_resolved', ['room'=>$name, 'catID'=>$catID, 'vars'=>$vids]);
+
+        foreach ($vids as $vid) {
             if (!IPS_VariableExists($vid)) {
+                $this->log(1, 'win_var_disappeared', ['room'=>$name, 'varID'=>$vid]);
                 continue;
             }
             $v  = @GetValue($vid);
             $vt = IPS_GetVariable($vid)['VariableType'] ?? -1;
 
-            // Heuristik: offen wenn TRUE / >0 / "open|auf|true|1"
-            if ($vt === 0) { // BOOL
-                if ((bool)$v === true) return true;
+            // Interpret open/closed
+            $open = false;
+            if ($vt === 0) {            // BOOL
+                $open = ((bool)$v === true);
             } elseif ($vt === 1 || $vt === 2) { // INT/FLOAT
-                if ((float)$v > 0.0) return true;
-            } elseif ($vt === 3) { // STRING
+                $open = ((float)$v > 0.0);
+            } elseif ($vt === 3) {      // STRING
                 $s = mb_strtolower(trim((string)$v));
-                if ($s === 'open' || $s === 'auf' || $s === 'true' || $s === '1') return true;
+                $open = in_array($s, ['open','auf','true','1'], true);
+            }
+
+            $this->log(3, 'win_var_eval', [
+                'room'=>$name, 'varID'=>$vid, 'varType'=>$vt, 'raw'=>$v, 'interpreted_open'=>$open
+            ]);
+
+            if ($open) {
+                $this->log(2, 'win_raw_any_open_true', ['room'=>$name, 'varID'=>$vid]);
+                return true;
             }
         }
+
+        $this->log(3, 'win_raw_all_closed', ['room'=>$name]);
         return false;
     }
+
     /**
      * Collect variable IDs contained in a category, following links and (optionally) subcategories.
      * - Supports: variables directly under the category
@@ -684,31 +710,68 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $out = [];
         foreach (IPS_GetChildrenIDs($catID) as $cid) {
+            // Variable directly in category
             if (IPS_VariableExists($cid)) {
+                $this->log(3, 'win_cat_child', ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'variable']);
                 $out[] = $cid;
                 continue;
             }
+
+            // Link?
             if (IPS_LinkExists($cid)) {
-                $target = @IPS_GetLink($cid)['TargetID'] ?? 0;
-                if ($target > 0) {
-                    if (IPS_VariableExists($target)) {
-                        $out[] = $target;
-                    } elseif (IPS_CategoryExists($target)) {
-                        // link points to another category → recurse
-                        $out = array_merge($out, $this->flattenCategoryVars($target, $visited));
-                    }
+                $lnk = @IPS_GetLink($cid);
+                $tID = (int)($lnk['TargetID'] ?? 0);
+                $rec = ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'link', 'target'=>$tID];
+
+                if ($tID > 0 && IPS_VariableExists($tID)) {
+                    $this->log(3, 'win_cat_link_to_var', $rec);
+                    $out[] = $tID;
+                } elseif ($tID > 0 && IPS_CategoryExists($tID)) {
+                    $this->log(3, 'win_cat_link_to_cat', $rec);
+                    $out = array_merge($out, $this->flattenCategoryVars($tID, $visited));
+                } else {
+                    $this->log(1, 'win_cat_link_target_missing', $rec);
                 }
                 continue;
             }
+
+            // Nested category (optional but supported)
             if (IPS_CategoryExists($cid)) {
-                // nested category (rare, but supported)
+                $this->log(3, 'win_cat_child', ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'category']);
                 $out = array_merge($out, $this->flattenCategoryVars($cid, $visited));
+                continue;
             }
+
+            // Other object types are ignored, but we log once for visibility
+            $this->log(3, 'win_cat_child_ignored', ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'other']);
         }
 
-        // de-dup IDs
-        return array_values(array_unique($out));
+        // Deduplicate
+        $out = array_values(array_unique($out));
+        return $out;
     }
+
+    public function DebugWindowCategory(string $roomName): void
+    {
+        $rooms = $this->getRoomsByName();
+        if (!isset($rooms[$roomName])) {
+            $this->log(1, 'debug_win_room_not_found', ['room'=>$roomName]);
+            return;
+        }
+        $r = $rooms[$roomName];
+        $catID = (int)($r['windowCatID'] ?? 0);
+        $this->log(2, 'debug_win_start', ['room'=>$roomName, 'catID'=>$catID]);
+
+        $vars = $this->flattenCategoryVars($catID);
+        foreach ($vars as $vid) {
+            if (!IPS_VariableExists($vid)) continue;
+            $v  = @GetValue($vid);
+            $vt = IPS_GetVariable($vid)['VariableType'] ?? -1;
+            $this->log(2, 'debug_win_var', ['room'=>$roomName, 'varID'=>$vid, 'type'=>$vt, 'value'=>$v]);
+        }
+        $this->log(2, 'debug_win_done', ['room'=>$roomName, 'count'=>count($vars)]);
+    }
+
     // ---> FIXED: safe attribute read + json decode
     private function getWindowStableMap(): array
     {
