@@ -796,14 +796,16 @@ class Zoning_and_Demand_Manager extends IPSModule
     }
     private function refreshOverrideIndicator(): void
     {
-        $vid = @$this->GetIDForIdent('OverrideActive');
-        $isOn = ($vid && @GetValue($vid)) ? true : false;
+        $vid  = @$this->GetIDForIdent('OverrideActive');
+        $isOn = ($vid && @GetValue($vid));
         try {
-            $this->UpdateFormField('OverrideActiveValue', 'label', $isOn ? 'Ja' : 'Nein');
+            // korrektes Form-Feld + Property
+            $this->UpdateFormField('OverrideActive', 'caption', $isOn ? 'Ja' : 'Nein');
         } catch (\Throwable $e) {
-            // ignorieren: wenn die Form nicht geöffnet ist
+            /* Form evtl. nicht offen – ignorieren */
         }
     }
+
     private function strContainsAny(string $haystack, array $needles): bool
     {
         $haystack = mb_strtolower($haystack);
