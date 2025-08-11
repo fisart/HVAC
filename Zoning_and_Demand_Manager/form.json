@@ -187,8 +187,8 @@
     "onClick": "ZDM_ProcessZoning($id);"
   }
 ],
-  "status": [
-    { "code": 102, "icon": "active", "caption": "OK" },
-    { "code": 202, "icon": "error", "caption": "Configuration incomplete" }
-  ]
+{ "type": "Label", "label": "--- Status ---" },
+{ "type": "Label", "label": "Override aktiv (nur Anzeige):", "bold": true },
+{ "type": "Label", "name": "OverrideActiveValue", "label": "—" }
+
 }

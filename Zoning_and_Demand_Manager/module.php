@@ -89,6 +89,8 @@ class Zoning_and_Demand_Manager extends IPSModule
             'interval_s' => (int)$this->ReadPropertyInteger('TimerInterval'),
             'hyst'       => (float)$this->ReadPropertyFloat('Hysteresis')
         ]);
+        $this->refreshOverrideIndicator();
+
     }
 
     // ---------- Public (Timer) ----------
@@ -268,6 +270,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->log(2, 'DEBUG_BEFORE_SET', ['old_value' => (bool)$old]);
 
             SetValue($vid, $on);
+            $this->refreshOverrideIndicator();
 
             $new = GetValue($vid);
             $this->log(2, 'DEBUG_AFTER_SET', ['new_value' => (bool)$new]);
@@ -791,7 +794,16 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         return null; // keine eindeutige Profil-Aussage
     }
-
+    private function refreshOverrideIndicator(): void
+    {
+        $vid = @$this->GetIDForIdent('OverrideActive');
+        $isOn = ($vid && @GetValue($vid)) ? true : false;
+        try {
+            $this->UpdateFormField('OverrideActiveValue', 'label', $isOn ? 'Ja' : 'Nein');
+        } catch (\Throwable $e) {
+            // ignorieren: wenn die Form nicht geöffnet ist
+        }
+    }
     private function strContainsAny(string $haystack, array $needles): bool
     {
         $haystack = mb_strtolower($haystack);
