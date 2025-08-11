@@ -521,24 +521,26 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $vinfo = IPS_GetVariable($varID);
         $varType = $vinfo['VariableType'] ?? -1;
-        $hasAction = ($vinfo['VariableAction'] ?? 0) !== 0 || ($vinfo['VariableCustomAction'] ?? 0) !== 0;
+        
+        // PRÄZISERE PRÜFUNG: Wir verwenden RequestAction NUR, wenn ein EIGENES Aktionsskript existiert.
+        $hasCustomAction = ($vinfo['VariableCustomAction'] ?? 0) !== 0;
 
         $this->log(3, 'writeVarSmart_debug', [
-            'varID'     => $varID,
-            'varType'   => $varType,
-            'hasAction' => $hasAction,
-            'value'     => $value
+            'varID'           => $varID,
+            'varType'         => $varType,
+            'hasCustomAction' => $hasCustomAction, // Logge das Ergebnis der neuen Prüfung
+            'value'           => $value
         ]);
 
-        // Wenn die Variable eine Aktion hat, verwenden wir immer RequestAction.
-        // Symcon kümmert sich dann um die korrekte Typumwandlung für das Aktionsskript.
-        if ($hasAction) {
+        // Wenn ein eigenes Skript da ist, soll es die Arbeit machen.
+        if ($hasCustomAction) {
             $this->log(3, 'writeVarSmart_execute', ['method' => 'RequestAction', 'varID' => $varID, 'value' => $value]);
             RequestAction($varID, $value);
-            return; // Wichtig: Danach die Funktion beenden.
+            return;
         }
 
-        // Wenn KEINE Aktion vorhanden ist, verwenden wir die typspezifischen SetValue-Befehle.
+        // In ALLEN ANDEREN Fällen setzen wir den Wert direkt und typsicher.
+        // Das deckt Statusvariablen UND Variablen mit reinen Anzeige-Profilen ab.
         $this->log(3, 'writeVarSmart_execute', ['method' => 'SetValue (type-specific)', 'varID' => $varID, 'value' => $value]);
 
         switch ($varType) {
@@ -549,23 +551,34 @@ class Zoning_and_Demand_Manager extends IPSModule
                 } elseif (is_string($value)) {
                     $finalValue = in_array(strtolower((string)$value), ['true', '1', 'on'], true);
                 }
-                SetValueBoolean($varID, (bool)$finalValue);
+                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
+                if (GetValueBoolean($varID) !== (bool)$finalValue) {
+                    SetValueBoolean($varID, (bool)$finalValue);
+                }
                 break;
 
             case 1: // Integer
-                SetValueInteger($varID, (int)$value);
+                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
+                if (GetValueInteger($varID) !== (int)$value) {
+                    SetValueInteger($varID, (int)$value);
+                }
                 break;
 
             case 2: // Float
-                SetValueFloat($varID, (float)$value);
+                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
+                if (GetValueFloat($varID) !== (float)$value) {
+                    SetValueFloat($varID, (float)$value);
+                }
                 break;
 
             case 3: // String
-                SetValueString($varID, (string)$value);
+                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
+                if (GetValueString($varID) !== (string)$value) {
+                    SetValueString($varID, (string)$value);
+                }
                 break;
 
             default:
-                // Fallback für unbekannte Typen (sollte nie passieren)
                 $this->log(1, 'writeVarSmart_unknown_type', ['varID' => $varID, 'varType' => $varType]);
                 SetValue($varID, $value);
                 break;
