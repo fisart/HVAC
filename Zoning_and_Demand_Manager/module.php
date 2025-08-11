@@ -232,6 +232,12 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     public function SetOverrideMode(bool $on): void
     {
+           // NEUER WÄCHTER:
+        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+            $this->log(2, 'ignore_set_override', ['reason' => 'Standalone Mode is active']);
+            return; // Befehl ignorieren und Funktion sofort verlassen
+        }
+
         // Trace caller + requested value
         $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1]['function'] ?? 'unknown';
         $this->log(2, 'DEBUG_OVERRIDE_SET_CALL', ['caller' => $caller, 'on' => $on]);
@@ -270,6 +276,12 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     public function CommandFlaps(string $stageName, string $flapConfigJson): void
     {
+
+          // NEUER WÄCHTER:
+        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+            $this->log(2, 'ignore_command_flaps', ['reason' => 'Standalone Mode is active', 'stage' => $stageName]);
+            return; // Befehl ignorieren und Funktion sofort verlassen
+        }
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
             $cfg = json_decode($flapConfigJson, true);
@@ -299,6 +311,11 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     public function CommandSystem(int $powerPercent, int $fanPercent): void
     {
+            // NEUER WÄCHTER:
+        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+            $this->log(2, 'ignore_command_system', ['reason' => 'Standalone Mode is active', 'power' => $powerPercent, 'fan' => $fanPercent]);
+            return; // Befehl ignorieren und Funktion sofort verlassen
+        }
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
             $p = $this->clamp($powerPercent, 0, 100);
