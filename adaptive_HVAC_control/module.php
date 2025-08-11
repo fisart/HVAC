@@ -64,10 +64,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyFloat('MinCoilTempLearning', 2.0);     // learning limit, °C
         $this->RegisterPropertyInteger('EmergencyCoilTempLink', 0);   // emergency cutoff variable link
 
-        // --- ALT (deprecated) für Migration ---
-        $this->RegisterPropertyFloat('MinCoilTemp', 2.0);             // will migrate into MinCoilTempLearning
-        $this->RegisterPropertyInteger('MinCoilTempLink', 0);         // will migrate into EmergencyCoilTempLink
-
         // --- Weitere Schutz-Parameter ---
         $this->RegisterPropertyFloat('MaxCoilDropRate', 1.5);         // K/min
         $this->RegisterPropertyBoolean('AbortOnCoilFreeze', true);
