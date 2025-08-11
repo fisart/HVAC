@@ -617,54 +617,56 @@ class adaptive_HVAC_control extends IPSModule
 
     public function setPercent(int $val)
     {
-        // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+        // Grund: Log-Aufruf ist korrekt.
         $this->log(3, 'setPercent', ['val' => $val]);
-        $linkID = $this->ReadPropertyInteger('PowerOutputLink');
 
-        if ($linkID == 0) {
-            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
-            $this->log(1, 'setPercent_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'PowerOutputLink not configured.']);
+        // Grund für Änderung: Die Eigenschaft enthält direkt die Variablen-ID.
+        // Die Variable heißt nun $targetVarID, um Verwirrung zu vermeiden.
+        $targetVarID = $this->ReadPropertyInteger('PowerOutputLink');
+
+        // Grund für Änderung: Die Prüfung erfolgt nun direkt auf die Variablen-ID.
+        if ($targetVarID == 0) {
+            $this->log(1, 'setPercent_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'PowerOutputLink variable not configured.']);
             return;
         }
 
-        $targetVarID = @IPS_GetLink($linkID)['targetID'];
-        if (!$targetVarID || !IPS_VariableExists($targetVarID)) {
-            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
-            $this->log(1, 'setPercent_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of PowerOutputLink is invalid.']);
+        // Grund für Änderung: Die unnötige IPS_GetLink-Logik wurde entfernt.
+        // Wir prüfen nur noch, ob die direkt zugewiesene Variable existiert.
+        if (!IPS_VariableExists($targetVarID)) {
+            $this->log(1, 'setPercent_invalid_var', ['varID' => $targetVarID, 'val' => $val, 'reason' => 'Variable from PowerOutputLink does not exist.']);
             return;
         }
 
         if (GetValue($targetVarID) != $val) {
-            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
             $this->log(3, 'RequestAction_Power', ['varID' => $targetVarID, 'val' => $val]);
             RequestAction($targetVarID, $val);
         }
     }
-
     /**
  * Sets the fan speed percentage on the linked output variable.
  */
     public function setFanSpeed(int $val)
     {
-        // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
+        // Grund: Log-Aufruf ist korrekt.
         $this->log(3, 'setFanSpeed', ['val' => $val]);
-        $linkID = $this->ReadPropertyInteger('FanOutputLink');
 
-        if ($linkID == 0) {
-            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
-            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'FanOutputLink not configured.']);
+        // Grund für Änderung: Die Eigenschaft enthält direkt die Variablen-ID.
+        $targetVarID = $this->ReadPropertyInteger('FanOutputLink');
+
+        // Grund für Änderung: Die Prüfung erfolgt nun direkt auf die Variablen-ID.
+        if ($targetVarID == 0) {
+            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'FanOutputLink variable not configured.']);
             return;
         }
 
-        $targetVarID = @IPS_GetLink($linkID)['targetID'];
-        if (!$targetVarID || !IPS_VariableExists($targetVarID)) {
-            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
-            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of FanOutputLink is invalid.']);
+        // Grund für Änderung: Die unnötige IPS_GetLink-Logik wurde entfernt.
+        // Wir prüfen nur noch, ob die direkt zugewiesene Variable existiert.
+        if (!IPS_VariableExists($targetVarID)) {
+            $this->log(1, 'setFanSpeed_invalid_var', ['varID' => $targetVarID, 'val' => $val, 'reason' => 'Variable from FanOutputLink does not exist.']);
             return;
         }
 
         if (GetValue($targetVarID) != $val) {
-            // Grund für Änderung: Log-Aufruf an die korrekte Signatur (int, string) angepasst.
             $this->log(3, 'RequestAction_Fan', ['varID' => $targetVarID, 'val' => $val]);
             RequestAction($targetVarID, $val);
         }
