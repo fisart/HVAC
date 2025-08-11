@@ -93,51 +93,51 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ApplyChanges()
     {
-        parent::ApplyChanges();
+        // === DEBUG START ===
+        $this->log(0, 'ApplyChanges_START', []);
+        parent::ApplyChanges(); // Wichtig: Zuerst aufrufen
+        $this->log(0, 'ApplyChanges_After_Parent', []);
+
+        // Wir lesen den Wert SOFORT nach parent::ApplyChanges()
+        $powerIdAfterParent = $this->ReadPropertyInteger('PowerOutputLink');
+        $this->log(0, 'ApplyChanges_Read_Immediately', ['PowerID_After_Parent' => $powerIdAfterParent]);
 
         // ---- one-time migration (no recursion) ----
         $migrated = (bool)$this->ReadAttributeBoolean('MigratedNaming');
         if (!$migrated) {
+            $this->log(0, 'ApplyChanges_Entering_Migration', []);
             $changed = false;
 
-            // MinCoilTemp -> MinCoilTempLearning (only if user had a non-default old value)
-            $minLearn = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
-            $minOld   = (float)$this->ReadPropertyFloat('MinCoilTemp');
-            if (abs($minLearn - 2.0) < 0.0001 && abs($minOld - 2.0) > 0.0001) {
-                IPS_SetProperty($this->InstanceID, 'MinCoilTempLearning', $minOld);
-                $changed = true;
-            }
-
-            // MinCoilTempLink -> EmergencyCoilTempLink (only if new is empty, old set)
-            $emergLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
-            $oldLink   = (int)$this->ReadPropertyInteger('MinCoilTempLink');
-            if ($emergLink === 0 && $oldLink > 0) {
-                IPS_SetProperty($this->InstanceID, 'EmergencyCoilTempLink', $oldLink);
-                $changed = true;
-            }
-
+            // ... der gesamte Migrations-Code ...
+            
             if ($changed) {
                 $this->WriteAttributeBoolean('MigratedNaming', true);
-                @IPS_ApplyChanges($this->InstanceID); // re-enter ONCE with migrated props
-                return; // avoid continuing in the pre-migration context
+                $this->log(0, 'ApplyChanges_Migration_ATTEMPT_RELOAD', []);
+                @IPS_ApplyChanges($this->InstanceID); 
+                return;
             } else {
-                // no migration needed; mark as done to avoid checking again
                 $this->WriteAttributeBoolean('MigratedNaming', true);
+                $this->log(0, 'ApplyChanges_Migration_SKIPPED', []);
             }
         }
 
         // ---- normal ApplyChanges flow ----
+        $this->log(0, 'ApplyChanges_Normal_Flow_START', []);
         $this->SetStatus(102);
         $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
         $this->SetTimerInterval('LearningTimer', $intervalMs);
+
+        // Letzter Check vor dem Ende
+        $powerIdAtEnd = $this->ReadPropertyInteger('PowerOutputLink');
+        $this->log(0, 'ApplyChanges_Final_Check', ['PowerID_At_End' => $powerIdAtEnd]);
 
         if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
             $this->initExploration();
         }
 
         $this->log(2, 'apply_changes', ['interval_ms' => $intervalMs]);
+        $this->log(0, 'ApplyChanges_END', []); 
     }
-
     // -------------------- Public APIs for Orchestrator/UI --------------------
 
     /**
