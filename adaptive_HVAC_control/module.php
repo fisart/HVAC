@@ -603,23 +603,55 @@ class adaptive_HVAC_control extends IPSModule
         return [$p, $f];
     }
 
-    private function setPercent(int $varID, int $val): void
+    public function setPercent(int $val)
     {
-        if ($varID <= 0 || !IPS_VariableExists($varID)) {
-            $this->log(1, 'setPercent_invalid_var', ['varID' => $varID, 'val' => $val]);
+        $this->log('ADHVAC', 5, 'setPercent', ['val' => $val]);
+        $linkID = $this->ReadPropertyInteger('PowerOutputLink');
+
+        if ($linkID == 0) {
+            $this->log('ADHVAC', 1, 'setPercent_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'PowerOutputLink not configured.']);
             return;
         }
-        $vt = IPS_GetVariable($varID)['VariableType'] ?? -1;
-        $this->log(3, 'setPercent_exec', ['varID' => $varID, 'val' => $val, 'type' => $vt]);
-        switch ($vt) {
-            case 0: @RequestAction($varID, $val >= 1); break;   // bool → on/off
-            case 1: @RequestAction($varID, (int)$val); break;   // int
-            case 2: @RequestAction($varID, (float)$val); break; // float
-            case 3: @RequestAction($varID, (string)$val); break;// string
-            default: @SetValue($varID, $val); break;
+
+        $targetVarID = @IPS_GetLink($linkID)['targetID'];
+        if (!$targetVarID || !IPS_VariableExists($targetVarID)) {
+            $this->log('ADHVAC', 1, 'setPercent_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of PowerOutputLink is invalid.']);
+            return;
+        }
+
+        if (GetValue($targetVarID) != $val) {
+            $this->log('ADHVAC', 5, 'RequestAction', ['varID' => $targetVarID, 'val' => $val]);
+            RequestAction($targetVarID, $val);
         }
     }
 
+    /**
+ * Sets the fan speed percentage on the linked output variable.
+ */
+    public function setFanSpeed(int $val)
+    {
+        // Use the new, accurate name in the logs
+        $this->log('ADHVAC', 5, 'setFanSpeed', ['val' => $val]);
+        $linkID = $this->ReadPropertyInteger('FanOutputLink');
+
+        if ($linkID == 0) {
+            // Use the new, accurate name in the error event
+            $this->log('ADHVAC', 1, 'setFanSpeed_invalid_var', ['varID' => 0, 'val' => $val, 'reason' => 'FanOutputLink not configured.']);
+            return;
+        }
+
+        $targetVarID = @IPS_GetLink($linkID)['targetID'];
+        if (!$targetVarID || !IPS_VariableExists($targetVarID)) {
+            // Use the new, accurate name in the error event
+            $this->log('ADHVAC', 1, 'setFanSpeed_invalid_var', ['varID' => $targetVarID, 'linkID' => $linkID, 'val' => $val, 'reason' => 'Target variable of FanOutputLink is invalid.']);
+            return;
+        }
+
+        if (GetValue($targetVarID) != $val) {
+            $this->log('ADHVAC', 5, 'RequestAction', ['varID' => $targetVarID, 'val' => $val]);
+            RequestAction($targetVarID, $val);
+        }
+    }
     // -------------------- Allowed Actions --------------------
 
     private function getAllowedActionPairs(): array
