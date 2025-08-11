@@ -521,67 +521,36 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $vinfo = IPS_GetVariable($varID);
         $varType = $vinfo['VariableType'] ?? -1;
-        
-        // PRÄZISERE PRÜFUNG: Wir verwenden RequestAction NUR, wenn ein EIGENES Aktionsskript existiert.
-        $hasCustomAction = ($vinfo['VariableCustomAction'] ?? 0) !== 0;
+        $hasAction = ($vinfo['VariableAction'] ?? 0) !== 0 || ($vinfo['VariableCustomAction'] ?? 0) !== 0;
 
-        $this->log(3, 'writeVarSmart_debug', [
-            'varID'           => $varID,
-            'varType'         => $varType,
-            'hasCustomAction' => $hasCustomAction, // Logge das Ergebnis der neuen Prüfung
-            'value'           => $value
-        ]);
-
-        // Wenn ein eigenes Skript da ist, soll es die Arbeit machen.
-        if ($hasCustomAction) {
-            $this->log(3, 'writeVarSmart_execute', ['method' => 'RequestAction', 'varID' => $varID, 'value' => $value]);
+        // Wir behalten die alte Logik bei, fügen aber neue Logs hinzu.
+        if ($hasAction) {
+            // --- NEUES LOG HIER ---
+            $this->log(0, 'DEBUG_ATTEMPT_REQUESTACTION', ['varID' => $varID, 'value' => $value]);
             RequestAction($varID, $value);
-            return;
-        }
+        } else {
+            // --- NEUES LOG HIER ---
+            $this->log(0, 'DEBUG_ATTEMPT_SETVALUE', ['varID' => $varID, 'varType' => $varType, 'value' => $value]);
 
-        // In ALLEN ANDEREN Fällen setzen wir den Wert direkt und typsicher.
-        // Das deckt Statusvariablen UND Variablen mit reinen Anzeige-Profilen ab.
-        $this->log(3, 'writeVarSmart_execute', ['method' => 'SetValue (type-specific)', 'varID' => $varID, 'value' => $value]);
-
-        switch ($varType) {
-            case 0: // Boolean
-                $finalValue = $value;
-                if (is_numeric($value)) {
-                    $finalValue = ((int)$value) >= 1;
-                } elseif (is_string($value)) {
-                    $finalValue = in_array(strtolower((string)$value), ['true', '1', 'on'], true);
-                }
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueBoolean($varID) !== (bool)$finalValue) {
-                    SetValueBoolean($varID, (bool)$finalValue);
-                }
-                break;
-
-            case 1: // Integer
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueInteger($varID) !== (int)$value) {
+            // Hier verwenden wir temporär eine einfache Logik, um die SetValue-Warnung zu finden.
+            // Die typsichere Version bauen wir erst ein, wenn wir wissen, welche Variable schreibgeschützt ist.
+            switch ($varType) {
+                case 0: // Boolean
+                    SetValueBoolean($varID, (bool)$value);
+                    break;
+                case 1: // Integer
                     SetValueInteger($varID, (int)$value);
-                }
-                break;
-
-            case 2: // Float
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueFloat($varID) !== (float)$value) {
+                    break;
+                case 2: // Float
                     SetValueFloat($varID, (float)$value);
-                }
-                break;
-
-            case 3: // String
-                // Verhindere unnötiges Schreiben, wenn der Wert bereits stimmt
-                if (GetValueString($varID) !== (string)$value) {
+                    break;
+                case 3: // String
                     SetValueString($varID, (string)$value);
-                }
-                break;
-
-            default:
-                $this->log(1, 'writeVarSmart_unknown_type', ['varID' => $varID, 'varType' => $varType]);
-                SetValue($varID, $value);
-                break;
+                    break;
+                default:
+                    SetValue($varID, $value);
+                    break;
+            }
         }
     }
 
