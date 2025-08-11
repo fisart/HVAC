@@ -89,12 +89,10 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ApplyChanges()
     {
+        // parent::ApplyChanges() lädt die Konfiguration aus der Datei.
         parent::ApplyChanges();
 
-        $this->log(0, 'ApplyChanges_Final_Version_Running', [
-            'PowerID_Check' => $this->ReadPropertyInteger('PowerOutputLink')
-        ]);
-
+        // Der Rest ist einfache Initialisierungslogik.
         $this->SetStatus(102);
         $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
         $this->SetTimerInterval('LearningTimer', $intervalMs);
@@ -102,7 +100,7 @@ class adaptive_HVAC_control extends IPSModule
         if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
             $this->initExploration();
         }
-    }    
+    }
     // -------------------- Public APIs for Orchestrator/UI --------------------
 
     /**
