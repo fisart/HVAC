@@ -163,13 +163,9 @@ class adaptive_HVAC_control extends IPSModule
         $fanID = $this->ReadPropertyInteger('FanOutputLink');
 
         // Wir geben den Wert direkt im PHP-Konsolen-Fenster aus.
-        echo "Manueller Lese-Test für Instanz #" . $this->InstanceID . "\n";
-        echo "----------------------------------------\n";
-        echo "Gelesener Wert für 'PowerOutputLink': " . $powerID . "\n";
-        echo "Gelesener Wert für 'FanOutputLink':   " . $fanID . "\n";
 
         // Zusätzlich loggen wir es mit höchster Priorität.
-        $this->log(0, 'MANUAL_PROPERTY_TEST', [
+        $this->log(2, 'MANUAL_PROPERTY_TEST', [
             'PowerOutputLink_Read' => $powerID,
             'FanOutputLink_Read' => $fanID
         ]);
