@@ -36,6 +36,14 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyInteger('MainFanControlLink', 0);  // bool oder integer (0..100)
         $this->RegisterPropertyInteger('MainACPowerLink', 0);
         $this->RegisterPropertyInteger('MainFanSpeedLink', 0);
+                // ---- Neue Properties für Notabschaltung ----
+        $this->RegisterPropertyInteger('CoilTemperatureLink', 0);
+        $this->RegisterPropertyFloat('EmergencyShutdownTemp', 1.0);
+        $this->RegisterPropertyFloat('EmergencyRestartTemp', 5.0);
+
+        // ---- Attribute ----
+        $this->RegisterAttributeBoolean('EmergencyShutdownActive', false); // NEU: Merker für Not-Aus-Zustand
+        $this->RegisterAttributeString('WindowStable', '{}');
         // Standalone-Konstanten (optional)
         $this->RegisterPropertyInteger('ConstantPower', 80);      // 0..100
         $this->RegisterPropertyInteger('ConstantFanSpeed', 80);   // 0..100
@@ -94,6 +102,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
     }
 
+   
     public function ProcessZoning(): void
     {
         if (IPS_GetKernelRunlevel() !== KR_READY) {
@@ -101,9 +110,49 @@ class Zoning_and_Demand_Manager extends IPSModule
             return;
         }
 
-        // HIER IST DIE KORREKTUR: `$this->guardEnter()` statt `$this.guardEnter()`
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
         try {
+            // =================================================================
+            // === NEU: NOT-AUS-LOGIK (HAT HÖCHSTE PRIORITÄT) ===
+            // =================================================================
+            $coilSensorID = (int)$this->ReadPropertyInteger('CoilTemperatureLink');
+            if ($coilSensorID > 0) {
+                $shutdownTemp = (float)$this->ReadPropertyFloat('EmergencyShutdownTemp');
+                $restartTemp  = (float)$this->ReadPropertyFloat('EmergencyRestartTemp');
+                $coilTemp     = $this->GetFloat($coilSensorID);
+                $isShutdown   = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
+
+                if ($isShutdown) {
+                    // Wir SIND im Not-Aus-Zustand. Prüfe, ob wir wieder starten dürfen.
+                    if (is_finite($coilTemp) && $coilTemp >= $restartTemp) {
+                        // Ja, die Temperatur ist wieder hoch genug.
+                        $this->WriteAttributeBoolean('EmergencyShutdownActive', false);
+                        $this->log(2, 'emergency_shutdown_ended', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
+                        // Die Funktion wird nun normal weiter ausgeführt.
+                    } else {
+                        // Nein, es ist immer noch zu kalt. Anlage bleibt aus.
+                        $this->log(1, 'emergency_shutdown_maintained', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
+                        $this->systemOff();
+                        $this->applyAllFlaps(false);
+                        return; // Beende die Funktion hier.
+                    }
+                } else {
+                    // Wir sind im NORMAL-Betrieb. Prüfe, ob wir abschalten müssen.
+                    if (is_finite($coilTemp) && $coilTemp <= $shutdownTemp) {
+                        // Ja, die Temperatur ist zu niedrig. NOT-AUS!
+                        $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
+                        $this->log(0, 'EMERGENCY_SHUTDOWN_ACTIVATED', ['coilTemp' => $coilTemp, 'shutdownTemp' => $shutdownTemp]);
+                        $this->systemOff();
+                        $this->applyAllFlaps(false);
+                        return; // Beende die Funktion hier.
+                    }
+                }
+            }
+            // === ENDE NOT-AUS-LOGIK ===
+            // =================================================================
+
+            // Ab hier beginnt Ihre exakte, bestehende und funktionierende Logik.
+            
             $override = GetValue($this->GetIDForIdent('OverrideActive'));
             if ($override) {
                 $this->log(2, 'override_active_mode_process');
@@ -132,28 +181,26 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $airSollStatusVarID = (int)($room['airSollStatusID'] ?? 0);
                 $demandVarID = (int)($room['demandID'] ?? 0);
 
-                // 1) Fenster-Check (hat immer Vorrang)
                 if ($this->isWindowOpenStable($room)) {
                     $this->setFlap($room, false);
-                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 3); // On Hold Window Open
+                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 3);
                     if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 0);
                     $this->log(3, 'room_window_open_flap_closed', ['room'=>$name]);
                     continue;
                 }
 
-                // 2) PRIMÄRE LOGIK: Prüfe den vom Benutzer gesetzten "Air Soll Status"
-                $roomMode = ($airSollStatusVarID > 0) ? $this->GetInt($airSollStatusVarID) : 3; // Fallback auf AUTO
+                $roomMode = ($airSollStatusVarID > 0) ? $this->GetInt($airSollStatusVarID) : 3;
                 $roomHasDemand = false;
 
-                if ($roomMode === 2) { // AC ON (Einmalige Anforderung)
+                if ($roomMode === 2) {
                     $ist = $this->GetFloat((int)($room['tempID'] ?? 0));
                     $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
                     if (is_finite($ist) && is_finite($soll) && $ist > $soll) {
                         $roomHasDemand = true;
                     } else {
-                        if ($airSollStatusVarID > 0) $this->writeVarSmart($airSollStatusVarID, 1); // AC OFF
+                        if ($airSollStatusVarID > 0) $this->writeVarSmart($airSollStatusVarID, 1);
                     }
-                } elseif ($roomMode === 3) { // AC AUTO (Automatische Regelung)
+                } elseif ($roomMode === 3) {
                     $ist = $this->GetFloat((int)($room['tempID'] ?? 0));
                     $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
                     $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
@@ -162,22 +209,20 @@ class Zoning_and_Demand_Manager extends IPSModule
                     }
                 }
 
-                // 3) FINALE ENTSCHEIDUNG für diesen Raum
                 if ($roomHasDemand) {
                     $this->setFlap($room, true);
                     $anyDemand = true;
                     if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 3);
-                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 2); // Automatic Cooling ACTIVE
+                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 2);
                     $this->log(2, 'room_demand_on', ['room' => $name, 'mode' => $roomMode]);
                 } else {
                     $this->setFlap($room, false);
                     if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 0);
-                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 0); // Ready for Cooling
+                    if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 0);
                     $this->log(2, 'room_demand_off', ['room' => $name, 'mode' => $roomMode]);
                 }
             }
 
-            // --- Der Rest der Funktion bleibt unverändert ---
             $this->log(2, 'DECIDE_SYSTEM', ['anyDemand' => $anyDemand]);
             if ($anyDemand) {
                 if ($this->ReadPropertyBoolean('StandaloneMode')) {
@@ -195,7 +240,6 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->guardLeave();
         }
     }
-
 
     // ---------- Public (Orchestrator APIs) ----------
 

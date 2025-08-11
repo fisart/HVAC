@@ -28,7 +28,30 @@
     { "type": "Label", "label": "--- Standalone Mode Settings ---", "visible": "this.StandaloneMode" },
     { "type": "NumberSpinner", "name": "ConstantPower", "caption": "Constant Power (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
     { "type": "NumberSpinner", "name": "ConstantFanSpeed", "caption": "Constant Fan Speed (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
-
+    { "type": "Label", "label": "--- Notabschaltung (Spulenschutz) ---" },
+    {
+      "type": "SelectVariable",
+      "name": "CoilTemperatureLink",
+      "caption": "Spulentemperatur-Sensor"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "EmergencyShutdownTemp",
+      "caption": "Abschalttemperatur (°C)",
+      "digits": 1,
+      "minimum": -5.0,
+      "maximum": 10.0,
+      "value": 1.0
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "EmergencyRestartTemp",
+      "caption": "Wiedereinschalttemperatur (°C)",
+      "digits": 1,
+      "minimum": 0.0,
+      "maximum": 15.0,
+      "value": 5.0
+    },
     { "type": "Label", "label": "--- Controlled Rooms ---" },
     {
       "type": "List",
