@@ -759,6 +759,47 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
         $this->log(2, 'debug_win_done', ['room'=>$roomName, 'count'=>count($vars)]);
     }
+    private function isOpenByProfile(int $varID, $value, array $vinfo): ?bool
+    {
+        // Profilname bestimmen (Custom hat Vorrang)
+        $profile = $vinfo['VariableCustomProfile'] ?: ($vinfo['VariableProfile'] ?? '');
+        if ($profile === '' || !IPS_VariableProfileExists($profile)) {
+            return null; // kein Profil → keine Aussage
+        }
+
+        $pi = IPS_GetVariableProfile($profile);
+        $assocs = $pi['Associations'] ?? [];
+        if (!is_array($assocs) || empty($assocs)) {
+            return null;
+        }
+
+        // Aktuellen Wert als Zahl (wenn möglich)
+        $valNum = is_numeric($value) ? (float)$value : null;
+
+        // Direktzuordnung: Wert == Association.Value → Label auswerten
+        foreach ($assocs as $a) {
+            $label = mb_strtolower((string)($a['Name'] ?? ''));
+            $aval  = (float)($a['Value'] ?? NAN);
+
+            if ($valNum !== null && $valNum === $aval) {
+                if ($this->strContainsAny($label, ['open','auf','offen','geöffnet'])) return true;
+                if ($this->strContainsAny($label, ['closed','zu','geschlossen']))     return false;
+                // Label enthält weder offen noch geschlossen → keine Aussage
+                return null;
+            }
+        }
+
+        return null; // keine eindeutige Profil-Aussage
+    }
+
+    private function strContainsAny(string $haystack, array $needles): bool
+    {
+        $haystack = mb_strtolower($haystack);
+        foreach ($needles as $n) {
+            if ($n !== '' && mb_strpos($haystack, $n) !== false) return true;
+        }
+        return false;
+    }
 
     // ---> FIXED: safe attribute read + json decode
     private function getWindowStableMap(): array
