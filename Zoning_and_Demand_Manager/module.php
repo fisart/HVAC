@@ -647,14 +647,18 @@ class Zoning_and_Demand_Manager extends IPSModule
     private function isWindowOpenRaw(array $room): bool
     {
         $catID = (int)($room['windowCatID'] ?? 0);
-        if ($catID <= 0 || !IPS_CategoryExists($catID)) return false;
+        if ($catID <= 0 || !IPS_CategoryExists($catID)) {
+            return false;
+        }
 
-        $children = IPS_GetChildrenIDs($catID);
-        foreach ($children as $cid) {
-            if (!IPS_VariableExists($cid)) continue;
-            $v = @GetValue($cid);
-            $vt = IPS_GetVariable($cid)['VariableType'] ?? -1;
+        foreach ($this->flattenCategoryVars($catID) as $vid) {
+            if (!IPS_VariableExists($vid)) {
+                continue;
+            }
+            $v  = @GetValue($vid);
+            $vt = IPS_GetVariable($vid)['VariableType'] ?? -1;
 
+            // Heuristik: offen wenn TRUE / >0 / "open|auf|true|1"
             if ($vt === 0) { // BOOL
                 if ((bool)$v === true) return true;
             } elseif ($vt === 1 || $vt === 2) { // INT/FLOAT
@@ -666,7 +670,45 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
         return false;
     }
+    /**
+     * Collect variable IDs contained in a category, following links and (optionally) subcategories.
+     * - Supports: variables directly under the category
+     * - Supports: links to variables (resolves TargetID)
+     * - Supports: links to categories and nested categories (recurses)
+     */
+    private function flattenCategoryVars(int $catID, array &$visited = []): array
+    {
+        if (!IPS_CategoryExists($catID)) return [];
+        if (isset($visited[$catID])) return [];
+        $visited[$catID] = true;
 
+        $out = [];
+        foreach (IPS_GetChildrenIDs($catID) as $cid) {
+            if (IPS_VariableExists($cid)) {
+                $out[] = $cid;
+                continue;
+            }
+            if (IPS_LinkExists($cid)) {
+                $target = @IPS_GetLink($cid)['TargetID'] ?? 0;
+                if ($target > 0) {
+                    if (IPS_VariableExists($target)) {
+                        $out[] = $target;
+                    } elseif (IPS_CategoryExists($target)) {
+                        // link points to another category → recurse
+                        $out = array_merge($out, $this->flattenCategoryVars($target, $visited));
+                    }
+                }
+                continue;
+            }
+            if (IPS_CategoryExists($cid)) {
+                // nested category (rare, but supported)
+                $out = array_merge($out, $this->flattenCategoryVars($cid, $visited));
+            }
+        }
+
+        // de-dup IDs
+        return array_values(array_unique($out));
+    }
     // ---> FIXED: safe attribute read + json decode
     private function getWindowStableMap(): array
     {
