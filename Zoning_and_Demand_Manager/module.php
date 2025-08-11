@@ -650,51 +650,41 @@ class Zoning_and_Demand_Manager extends IPSModule
         $name  = (string)($room['name'] ?? 'room');
 
         if ($catID <= 0 || !IPS_CategoryExists($catID)) {
-            $this->log(2, 'win_raw_no_category', ['room'=>$name, 'catID'=>$catID]);
+            // Nur bei echter Fehlkonfiguration loggen
+            $this->log(1, 'win_raw_no_category', ['room'=>$name, 'catID'=>$catID]);
             return false;
         }
 
-        $this->log(3, 'win_cat_scan_start', ['room'=>$name, 'catID'=>$catID]);
-
-        $vids = $this->flattenCategoryVars($catID); // resolves links + nested cats
-        if (empty($vids)) {
-            $this->log(2, 'win_cat_no_vars_found', ['room'=>$name, 'catID'=>$catID]);
-            return false;
-        }
-        $this->log(3, 'win_cat_vars_resolved', ['room'=>$name, 'catID'=>$catID, 'vars'=>$vids]);
-
-        foreach ($vids as $vid) {
+        foreach ($this->flattenCategoryVars($catID) as $vid) {
             if (!IPS_VariableExists($vid)) {
+                // Zielvariable existiert nicht (z. B. gelöschtes Target einer Link-Referenz)
                 $this->log(1, 'win_var_disappeared', ['room'=>$name, 'varID'=>$vid]);
                 continue;
             }
-            $v  = @GetValue($vid);
-            $vt = IPS_GetVariable($vid)['VariableType'] ?? -1;
 
-            // Interpret open/closed
-            $open = false;
-            if ($vt === 0) {            // BOOL
-                $open = ((bool)$v === true);
-            } elseif ($vt === 1 || $vt === 2) { // INT/FLOAT
-                $open = ((float)$v > 0.0);
-            } elseif ($vt === 3) {      // STRING
-                $s = mb_strtolower(trim((string)$v));
-                $open = in_array($s, ['open','auf','true','1'], true);
+            $vinfo = IPS_GetVariable($vid);
+            $v     = @GetValue($vid);
+            $vt    = (int)($vinfo['VariableType'] ?? -1);
+
+            // Profil zuerst (offen/geschlossen, auf/zu, etc.)
+            $byProfile = $this->isOpenByProfile($vid, $v, $vinfo);
+            if ($byProfile !== null) {
+                if ($byProfile === true) return true;
+                continue;
             }
 
-            $this->log(3, 'win_var_eval', [
-                'room'=>$name, 'varID'=>$vid, 'varType'=>$vt, 'raw'=>$v, 'interpreted_open'=>$open
-            ]);
+            // Fallback-Heuristik
+            $open =
+                ($vt === 0) ? ((bool)$v === true) :
+                (($vt === 1 || $vt === 2) ? ((float)$v > 0.0) :
+                $this->strContainsAny(mb_strtolower(trim((string)$v)), ['open','auf','offen','geöffnet','true','1']));
 
-            if ($open) {
-                $this->log(2, 'win_raw_any_open_true', ['room'=>$name, 'varID'=>$vid]);
-                return true;
-            }
+            if ($open) return true;
         }
 
-        $this->log(3, 'win_raw_all_closed', ['room'=>$name]);
         return false;
     }
+
 
     /**
      * Collect variable IDs contained in a category, following links and (optionally) subcategories.
@@ -710,46 +700,31 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $out = [];
         foreach (IPS_GetChildrenIDs($catID) as $cid) {
-            // Variable directly in category
             if (IPS_VariableExists($cid)) {
-                $this->log(3, 'win_cat_child', ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'variable']);
                 $out[] = $cid;
                 continue;
             }
-
-            // Link?
             if (IPS_LinkExists($cid)) {
-                $lnk = @IPS_GetLink($cid);
-                $tID = (int)($lnk['TargetID'] ?? 0);
-                $rec = ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'link', 'target'=>$tID];
-
+                $tID = (int) (@IPS_GetLink($cid)['TargetID'] ?? 0);
                 if ($tID > 0 && IPS_VariableExists($tID)) {
-                    $this->log(3, 'win_cat_link_to_var', $rec);
                     $out[] = $tID;
-                } elseif ($tID > 0 && IPS_CategoryExists($tID)) {
-                    $this->log(3, 'win_cat_link_to_cat', $rec);
-                    $out = array_merge($out, $this->flattenCategoryVars($tID, $visited));
-                } else {
-                    $this->log(1, 'win_cat_link_target_missing', $rec);
+                    continue;
                 }
+                if ($tID > 0 && IPS_CategoryExists($tID)) {
+                    $out = array_merge($out, $this->flattenCategoryVars($tID, $visited));
+                    continue;
+                }
+                // Nur warnen, wenn Link auf nichts/kein Objekt zeigt
+                $this->log(1, 'win_cat_link_target_missing', ['parentCat'=>$catID, 'childID'=>$cid, 'target'=>$tID]);
                 continue;
             }
-
-            // Nested category (optional but supported)
             if (IPS_CategoryExists($cid)) {
-                $this->log(3, 'win_cat_child', ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'category']);
                 $out = array_merge($out, $this->flattenCategoryVars($cid, $visited));
-                continue;
             }
-
-            // Other object types are ignored, but we log once for visibility
-            $this->log(3, 'win_cat_child_ignored', ['parentCat'=>$catID, 'childID'=>$cid, 'type'=>'other']);
         }
-
-        // Deduplicate
-        $out = array_values(array_unique($out));
-        return $out;
+        return array_values(array_unique($out));
     }
+
     // ---------- Public: Diagnostics (SSOT) ----------
 
     /** Map of room name -> resolved window sensor variable IDs (links + nested cats already resolved). */
