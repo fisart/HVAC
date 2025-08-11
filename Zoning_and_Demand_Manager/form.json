@@ -186,7 +186,7 @@
     "caption": "Run zoning now",
     "onClick": "ZDM_ProcessZoning($id);"
   }
-]
+],
   "status": [
     { "code": 102, "icon": "active", "caption": "OK" },
     { "code": 202, "icon": "error", "caption": "Configuration incomplete" }
