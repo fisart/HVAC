@@ -750,6 +750,19 @@ class Zoning_and_Demand_Manager extends IPSModule
         $out = array_values(array_unique($out));
         return $out;
     }
+    // ---------- Public: Diagnostics (SSOT) ----------
+
+    /** Map of room name -> resolved window sensor variable IDs (links + nested cats already resolved). */
+    public function GetWindowVarIDs(): string
+    {
+        $out = [];
+        foreach ($this->getRooms() as $r) {
+            $name = (string)($r['name'] ?? 'room');
+            $cat  = (int)($r['windowCatID'] ?? 0);
+            $out[$name] = ($cat > 0) ? $this->flattenCategoryVars($cat) : [];
+        }
+        return json_encode($out);
+    }
 
     public function DebugWindowCategory(string $roomName): void
     {
