@@ -43,7 +43,6 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // ---- Attribute ----
         $this->RegisterAttributeBoolean('EmergencyShutdownActive', false); // NEU: Merker für Not-Aus-Zustand
-        $this->RegisterAttributeString('WindowStable', '{}');
         // Standalone-Konstanten (optional)
         $this->RegisterPropertyInteger('ConstantPower', 80);      // 0..100
         $this->RegisterPropertyInteger('ConstantFanSpeed', 80);   // 0..100
