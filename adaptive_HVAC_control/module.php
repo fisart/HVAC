@@ -235,7 +235,7 @@ class adaptive_HVAC_control extends IPSModule
             IPS_SemaphoreLeave('ADHVAC_' . $this->InstanceID);
         }
      }
-    }
+    
 
     // -------------------- Orchestrator API (global wrapper: ACIPS_ForceActionAndLearn) --------------------
 
