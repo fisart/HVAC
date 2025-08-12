@@ -28,6 +28,8 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyBoolean('StandaloneMode', false);
         $this->RegisterPropertyInteger('TimerInterval', 60); // Sekunden
         $this->RegisterPropertyFloat('Hysteresis', 0.5);
+        $this->RegisterPropertyInteger('StandalonePowerVar', 0); // optional: Integer 0..100
+        $this->RegisterPropertyInteger('StandaloneFanVar', 0);   // optional: Integer 0..100
 
         // Systemweite Verknüpfungen (IDs von Variablen/Aktoren)
         $this->RegisterPropertyInteger('HeatingActiveLink', 0);
@@ -452,6 +454,22 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->setFlap($r, $open);
         }
     }
+    private function readStandalonePercent(string $propName, int $fallbackConst): int
+    {
+        $vid = (int)$this->ReadPropertyInteger($propName);
+        if ($vid > 0 && IPS_VariableExists($vid)) {
+            $val = @GetValue($vid);
+            if (is_numeric($val)) {
+                $pct = $this->clamp((int)$val, 0, 100);
+                // nur bei Bedarf sichtbar machen: woher kam der Wert?
+                $this->log(3, 'standalone_source', ['prop'=>$propName,'src'=>'var','varID'=>$vid,'value'=>$pct]);
+                return $pct;
+            }
+        }
+        $pct = $this->clamp($fallbackConst, 0, 100);
+        $this->log(3, 'standalone_source', ['prop'=>$propName,'src'=>'const','value'=>$pct]);
+        return $pct;
+    }
 
     /**
      * Setzt eine Klappe je nach Typ (boolean/linear).
@@ -512,11 +530,14 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     private function systemOnStandalone(): void
     {
-        $p = $this->clamp((int)$this->ReadPropertyInteger('ConstantPower'), 0, 100);
-        $f = $this->clamp((int)$this->ReadPropertyInteger('ConstantFanSpeed'), 0, 100);
+        // Werte aus Variablen, sonst auf Konstanten zurückfallen
+        $p = $this->readStandalonePercent('StandalonePowerVar',    (int)$this->ReadPropertyInteger('ConstantPower'));
+        $f = $this->readStandalonePercent('StandaloneFanVar',      (int)$this->ReadPropertyInteger('ConstantFanSpeed'));
+
         $this->systemSetPercent($p, $f);
         $this->log(2, 'system_on_standalone', ['power'=>$p, 'fan'=>$f]);
     }
+
 
     private function systemOff(): void
     {
@@ -784,7 +805,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             $label = mb_strtolower((string)($a['Name'] ?? ''));
             $aval  = (float)($a['Value'] ?? NAN);
 
-            if ($valNum !== null && $valNum === $aval) {
+           if ($valNum !== null && $valNum === $aval) {
                 if ($this->strContainsAny($label, ['open','auf','offen','geöffnet'])) return true;
                 if ($this->strContainsAny($label, ['closed','zu','geschlossen']))     return false;
                 // Label enthält weder offen noch geschlossen → keine Aussage

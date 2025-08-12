@@ -27,8 +27,10 @@
     { "type": "SelectVariable", "name": "MainFanSpeedLink", "caption": "Main Fan Speed Control Link" },
 
     { "type": "Label", "label": "--- Standalone Mode Settings ---", "visible": "this.StandaloneMode" },
-    { "type": "NumberSpinner", "name": "ConstantPower", "caption": "Constant Power (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
-    { "type": "NumberSpinner", "name": "ConstantFanSpeed", "caption": "Constant Fan Speed (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
+    { "type": "SelectVariable", "name": "StandalonePowerVar", "caption": "Standalone Power (Integer 0–100)", "visible": "this.StandaloneMode" },
+    { "type": "SelectVariable", "name": "StandaloneFanVar",   "caption": "Standalone Fan Speed (Integer 0–100)", "visible": "this.StandaloneMode" },
+    { "type": "NumberSpinner", "name": "ConstantPower", "caption": "Fallback: Constant Power (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
+    { "type": "NumberSpinner", "name": "ConstantFanSpeed", "caption": "Fallback: Constant Fan Speed (%)", "minimum": 0, "maximum": 100, "value": 80, "visible": "this.StandaloneMode" },
 
     { "type": "Label", "label": "--- Notabschaltung (Spulenschutz) ---" },
     { "type": "SelectVariable", "name": "CoilTemperatureLink", "caption": "Spulentemperatur-Sensor" },
