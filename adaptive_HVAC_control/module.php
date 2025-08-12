@@ -94,8 +94,8 @@ class adaptive_HVAC_control extends IPSModule
 
         // Der Rest ist einfache Initialisierungslogik.
         $this->SetStatus(102);
-        $intervalMs = max(1000, (int)$this->ReadPropertyInteger('TimerInterval') * 1000);
-        $this->SetTimerInterval('LearningTimer', $intervalMs);
+        // ACIPS is now ticked by ZDM → disable internal timer
+        $this->SetTimerInterval('LearningTimer', 0);
 
         if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
             $this->initExploration();
@@ -182,10 +182,15 @@ class adaptive_HVAC_control extends IPSModule
 
     // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
 
-    public function ProcessLearning(): void
-    {
-        // Debug: Properties beim Start loggen
-        $this->log(3, 'process_learning_start', [
+     public function ProcessLearning(): void
+     {
+        // Avoid overlapping ticks if ZDM triggers fast back-to-back
+        if (!IPS_SemaphoreEnter('ADHVAC_' . $this->InstanceID, 0)) {
+            $this->log(2, 'skip_overlapping_tick');
+            return;
+        }
+        try {
+            $this->log(3, 'process_learning_start', [
             'PowerOutputLink' => $this->ReadPropertyInteger('PowerOutputLink'),
             'FanOutputLink' => $this->ReadPropertyInteger('FanOutputLink'),
             'ACActiveLink' => $this->ReadPropertyInteger('ACActiveLink')
@@ -226,6 +231,10 @@ class adaptive_HVAC_control extends IPSModule
 
         $this->annealEpsilon();
         $this->persistQTableIfNeeded();
+        } finally {
+            IPS_SemaphoreLeave('ADHVAC_' . $this->InstanceID);
+        }
+     }
     }
 
     // -------------------- Orchestrator API (global wrapper: ACIPS_ForceActionAndLearn) --------------------

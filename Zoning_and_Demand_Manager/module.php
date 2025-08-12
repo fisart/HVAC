@@ -55,7 +55,8 @@ class Zoning_and_Demand_Manager extends IPSModule
         // ---- Neue Properties ----
         $this->RegisterPropertyInteger('WindowDebounceSec', 10); // 0..120 Sekunden
         $this->RegisterPropertyInteger('LogLevel', 3);           // 0=ERROR,1=WARN,2=INFO,3=DEBUG
-
+        // Adaptive (ACIPS) cooperation
+        $this->RegisterPropertyInteger('AdaptiveInstanceID', 0);
         // ---- Attribute ----
         $this->RegisterAttributeString('WindowStable', '{}');    // {roomName:{open:bool, ts:int}}
         $this->RegisterAttributeString('LastAggregates', '{}');  // Cache/Debug
@@ -114,6 +115,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
 
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
+        $shouldTickACIPS = false; // NEW: compute intent inside critical section
         try {
             // =================================================================
             // === NEU: NOT-AUS-LOGIK (HAT HÖCHSTE PRIORITÄT) ===
@@ -232,6 +234,8 @@ class Zoning_and_Demand_Manager extends IPSModule
                     $this->systemOnStandalone();
                 } else {
                     $this->systemSetPercent(1, 1);
+                    // Only tick ACIPS in cooperative mode and if no emergency shutdown
+                    $shouldTickACIPS = !(bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
                 }
             } else {
                 $this->systemOff();
@@ -242,6 +246,18 @@ class Zoning_and_Demand_Manager extends IPSModule
         } finally {
             $this->guardLeave();
         }
+               // ---- Trigger ACIPS OUTSIDE the semaphore (avoids deadlock) ----
+        if ($shouldTickACIPS) {
+            $acipsID = (int)$this->ReadPropertyInteger('AdaptiveInstanceID');
+            if ($acipsID > 0 && IPS_InstanceExists($acipsID)) {
+                // Fire-and-forget wrapper call
+                @IPS_RunScriptText('ACIPS_ProcessLearning(' . $acipsID . ');');
+                $this->log(3, 'triggered_acips_tick', ['acipsID' => $acipsID]);
+            } else {
+                $this->log(1, 'acips_not_configured_for_trigger', ['acipsID' => $acipsID]);
+            }
+        }
+    
     }
 
     // ---------- Public (Orchestrator APIs) ----------
