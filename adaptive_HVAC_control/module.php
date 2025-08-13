@@ -244,10 +244,11 @@ class adaptive_HVAC_control extends IPSModule
 
             // Stash meta for next transition
             $this->SetBuffer('MetaData', json_encode([
-                'stateKey' => $sKeyNew,
+                'stateKey' => $this->stateKey($state),
                 'action'   => $p . ':' . $f,
                 'wad'      => $metrics['rawWAD'] ?? 0.0,
                 'coil'     => $metrics['coilTemp'],
+                'maxDelta' => $state['maxDelta'],   // <-- NEW: stash previous comfort error
                 'ts'       => time()
             ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
 
@@ -297,14 +298,15 @@ class adaptive_HVAC_control extends IPSModule
         $this->persistQTableIfNeeded();
         $this->UpdateVisualization();
 
-        // Seed next transition
         $this->SetBuffer('MetaData', json_encode([
-            'stateKey' => $sKeyNew,
+            'stateKey' => $this->stateKey($state),
             'action'   => $p . ':' . $f,
             'wad'      => $metrics['rawWAD'] ?? 0.0,
             'coil'     => $metrics['coilTemp'],
+            'maxDelta' => $state['maxDelta'],   // <-- NEW: stash previous comfort error
             'ts'       => time()
         ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+       // Seed next transition
 
         return json_encode(['ok'=>true, 'applied'=>['p'=>$p,'f'=>$f]]);
     }
@@ -467,11 +469,11 @@ class adaptive_HVAC_control extends IPSModule
     }
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
     {
-        // Base
+        // Base from v2.8.3
         $comfort = -($state['maxDelta'] ?? 0.0);
         $energy  = -0.01 * (($action['p'] ?? 0) + ($action['f'] ?? 0));
+        $window  = -0.5 * (int)($state['anyWindowOpen'] ?? 0);  // keep as-is; remove later if you drop window entirely
 
-        // Change penalty vs last action
         $penalty = 0.0;
         if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
             $dp = abs(((int)$m[1]) - ($action['p'] ?? 0));
@@ -479,7 +481,7 @@ class adaptive_HVAC_control extends IPSModule
             $penalty = -0.002 * ($dp + $df);
         }
 
-        // Progress (WAD) and coil freeze shaping
+        // Shaping from v3.4
         $progress = 0.0;
         if ($metrics && $prevMeta && isset($prevMeta['wad'])) {
             $progress = (($prevMeta['wad'] ?? 0.0) - ($metrics['rawWAD'] ?? 0.0)) * 10.0;
@@ -494,9 +496,21 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        return (float)round($comfort + $energy + $penalty + $progress + $freeze, 4);
-    }
+        // --- NEW: comfort trend bonus/penalty (no new state) ---
+        // Uses change in maxDelta: if maxDelta decreased, we are improving.
+        $trend = 0.0;
+        if ($prevMeta && isset($prevMeta['maxDelta']) && isset($state['maxDelta'])) {
+            $delta = ((float)$prevMeta['maxDelta']) - ((float)$state['maxDelta']); // >0 = getting better
+            $epsTrend = 0.10;  // ignore tiny noise (<0.1°C)
+            $kTrend   = 2.0;   // weight
+            if (abs($delta) > $epsTrend) {
+                $trend = $kTrend * $delta; // positive if improving, negative if worsening
+            }
+        }
 
+        return (float)round($comfort + $energy + $window + $penalty + $progress + $freeze + $trend, 4);
+    }
+ 
 
 
     private function bestActionForState(array $state, array $allowedKeys): string
