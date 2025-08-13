@@ -175,7 +175,6 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessLearning(): void
     {
-        // Overlap guard
         if (!IPS_SemaphoreEnter('ADHVAC_' . $this->InstanceID, 0)) {
             $this->log(2, 'skip_overlapping_tick');
             return;
@@ -192,7 +191,7 @@ class adaptive_HVAC_control extends IPSModule
                 return;
             }
             if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
-                $this->applyAction(0, 0);  // ensure outputs off when AC inactive
+                $this->applyAction(0, 0);
                 $this->log(3, 'ac_inactive_skip');
                 return;
             }
@@ -210,22 +209,25 @@ class adaptive_HVAC_control extends IPSModule
                 return;
             }
 
-            // Build state and compute metrics for reward shaping
-            $state   = $this->buildStateVector();
-            $label = $this->formatStateLabel($state);
-            $this->rememberStateLabel($this->stateKey($state), $label);
-            $metrics = $this->computeRoomMetrics();
+            // Build state, derive bucket key using coil trend vs previous coil
+            $state    = $this->buildStateVector();
+            $label    = $this->formatStateLabel($state);
+            $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+            $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil'])) ? $prevMeta['coil'] : ($state['coilTemp'] ?? null);
 
-            // Transition update: (prev state,action) -> current state
-            $prev = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-            if (is_array($prev) && isset($prev['stateKey'], $prev['action'])) {
-                $rewardPrev = $this->calculateReward($state, $this->pairToArray($prev['action']), $metrics, $prev);
-                $this->qlearnUpdateTransition($prev['stateKey'], $prev['action'], $rewardPrev, $this->stateKey($state));
+            $sKeyNew  = $this->stateKeyBuckets($state, $prevCoil);
+            $this->rememberStateLabel($sKeyNew, $label);
+            $metrics  = $this->computeRoomMetrics();
+
+            // Transition update: (prev state,action) -> current bucketed state
+            if (is_array($prevMeta) && isset($prevMeta['stateKey'], $prevMeta['action'])) {
+                $rewardPrev = $this->calculateReward($state, $this->pairToArray($prevMeta['action']), $metrics, $prevMeta);
+                $this->qlearnUpdateTransition($prevMeta['stateKey'], $prevMeta['action'], $rewardPrev, $sKeyNew);
             }
 
-            // Select next action; avoid 0:0 when demand exists
+            // Select next action; avoid 0:0 while demand exists
             $allowedKeys = array_keys($this->getAllowedActionPairs());
-            $hasDemand = ($state['numActiveRooms'] ?? 0) > 0 || $hasZdm;
+            $hasDemand   = ($state['numActiveRooms'] ?? 0) > 0 || $hasZdm;
             if ($hasDemand) {
                 $allowedKeys = array_values(array_filter($allowedKeys, fn($k) => $k !== '0:0'));
             }
@@ -235,14 +237,14 @@ class adaptive_HVAC_control extends IPSModule
             // Apply action
             $this->applyAction($p, $f);
 
-            // Epsilon, persist, diag
+            // Epsilon, persist, UI
             $this->annealEpsilon();
             $this->persistQTableIfNeeded();
             $this->UpdateVisualization();
 
             // Stash meta for next transition
             $this->SetBuffer('MetaData', json_encode([
-                'stateKey' => $this->stateKey($state),
+                'stateKey' => $sKeyNew,
                 'action'   => $p . ':' . $f,
                 'wad'      => $metrics['rawWAD'] ?? 0.0,
                 'coil'     => $metrics['coilTemp'],
@@ -255,10 +257,8 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     // -------------------- Orchestrator API --------------------
-
     public function ForceActionAndLearn(string $pair): string
     {
-        // Demand & safety
         if (!$this->hasZdmCoolingDemand()) {
             $this->applyAction(0, 0);
             return json_encode(['ok'=>false,'err'=>'zdm_no_demand']);
@@ -276,18 +276,22 @@ class adaptive_HVAC_control extends IPSModule
         [$p, $f] = $act;
         [$p, $f] = $this->limitDeltas($p, $f);
 
-        // Transition update first
-        $state   = $this->buildStateVector();
-        $label = $this->formatStateLabel($state);
-        $this->rememberStateLabel($this->stateKey($state), $label);
-        $metrics = $this->computeRoomMetrics();
-        $prev    = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-        if (is_array($prev) && isset($prev['stateKey'], $prev['action'])) {
-            $rewardPrev = $this->calculateReward($state, $this->pairToArray($prev['action']), $metrics, $prev);
-            $this->qlearnUpdateTransition($prev['stateKey'], $prev['action'], $rewardPrev, $this->stateKey($state));
+        // Build state and transition using bucket key
+        $state    = $this->buildStateVector();
+        $label    = $this->formatStateLabel($state);
+        $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil'])) ? $prevMeta['coil'] : ($state['coilTemp'] ?? null);
+
+        $sKeyNew  = $this->stateKeyBuckets($state, $prevCoil);
+        $this->rememberStateLabel($sKeyNew, $label);
+        $metrics  = $this->computeRoomMetrics();
+
+        if (is_array($prevMeta) && isset($prevMeta['stateKey'], $prevMeta['action'])) {
+            $rewardPrev = $this->calculateReward($state, $this->pairToArray($prevMeta['action']), $metrics, $prevMeta);
+            $this->qlearnUpdateTransition($prevMeta['stateKey'], $prevMeta['action'], $rewardPrev, $sKeyNew);
         }
 
-        // Apply forced action, persist, diag
+        // Apply forced action, persist, UI
         $this->applyAction($p, $f);
         $this->WriteAttributeString('LastAction', $p.':'.$f);
         $this->persistQTableIfNeeded();
@@ -295,7 +299,7 @@ class adaptive_HVAC_control extends IPSModule
 
         // Seed next transition
         $this->SetBuffer('MetaData', json_encode([
-            'stateKey' => $this->stateKey($state),
+            'stateKey' => $sKeyNew,
             'action'   => $p . ':' . $f,
             'wad'      => $metrics['rawWAD'] ?? 0.0,
             'coil'     => $metrics['coilTemp'],
@@ -304,6 +308,7 @@ class adaptive_HVAC_control extends IPSModule
 
         return json_encode(['ok'=>true, 'applied'=>['p'=>$p,'f'=>$f]]);
     }
+
 
     public function ResetLearning(): void
     {
@@ -365,29 +370,24 @@ class adaptive_HVAC_control extends IPSModule
 
         $numActive = 0;
         $maxDelta  = 0.0;
-        $anyWindow = false;
 
         foreach ($rooms as $r) {
             $ist  = $this->getFloat((int)($r['tempID'] ?? 0));
             $soll = $this->getFloat((int)($r['targetID'] ?? 0));
-            $win  = $this->roomWindowOpen($r);
-
             if (is_finite($ist) && is_finite($soll)) {
                 $delta = $ist - $soll;
-                if (!$win && $delta > $hyst) {
+                if ($delta > $hyst) {
                     $numActive++;
                     $maxDelta = max($maxDelta, $delta);
                 }
             }
-            $anyWindow = $anyWindow || $win;
         }
 
-        // ZDM Aggregates
+        // ZDM Aggregates (still supported)
         $agg = $this->fetchZDMAggregates();
         if ($agg) {
             $numActive = max($numActive, (int)($agg['numActiveRooms'] ?? 0));
             $maxDelta  = max($maxDelta, (float)($agg['maxDeltaT'] ?? 0.0));
-            $anyWindow = $anyWindow || !empty($agg['anyWindowOpen']);
         }
 
         // Coil Temp
@@ -396,10 +396,10 @@ class adaptive_HVAC_control extends IPSModule
         return [
             'numActiveRooms' => $numActive,
             'maxDelta'       => round($maxDelta, 2),
-            'anyWindowOpen'  => (int)$anyWindow,
             'coilTemp'       => is_finite($coil) ? round($coil, 2) : null
         ];
     }
+   
     private function formatStateLabel(array $s): string
     {
         $n = (int)($s['numActiveRooms'] ?? 0);
@@ -461,13 +461,11 @@ class adaptive_HVAC_control extends IPSModule
             'coilTemp' => is_finite($coil) ? round($coil, 3) : null
         ];
     }
-
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
     {
-        // Base from v2.8.3
+        // Base from v2.8.3 (no window penalty; ZDM handles windows)
         $comfort = -($state['maxDelta'] ?? 0.0);
         $energy  = -0.01 * (($action['p'] ?? 0) + ($action['f'] ?? 0));
-        $window  = -0.5 * (int)($state['anyWindowOpen'] ?? 0);
 
         $penalty = 0.0;
         if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
@@ -491,8 +489,9 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        return (float)round($comfort + $energy + $window + $penalty + $progress + $freeze, 4);
+        return (float)round($comfort + $energy + $penalty + $progress + $freeze, 4);
     }
+
 
     private function bestActionForState(array $state, array $allowedKeys): string
     {
@@ -910,6 +909,53 @@ class adaptive_HVAC_control extends IPSModule
         }
 
         return $html.'</tbody></table>';
+    }
+    /* ---------- Bucketing helpers + readable state key (ADD) ---------- */
+
+    private function binN(int $n): int {
+        if ($n <= 0) return 0;
+        if ($n == 1) return 1;
+        if ($n == 2) return 2;
+        if ($n == 3) return 3;
+        return 4; // 4+
+    }
+
+    private function binD(float $d): int {
+        // ΔT (°C) edges tuned for HVAC response
+        $edges = [0.3, 0.6, 1.0, 1.5, 2.5, 3.5, 5.0];
+        foreach ($edges as $i => $e) {
+            if ($d <= $e) return $i;      // 0..6
+        }
+        return count($edges);             // 7+
+    }
+
+    private function binC(?float $coil, float $minL): int {
+        if (!is_numeric($coil)) return 0; // unknown → neutral
+        $m = $coil - $minL;               // margin to learning min
+        if ($m <= -2.0) return -3;
+        if ($m <= -1.0) return -2;
+        if ($m <= -0.3) return -1;
+        if ($m <   0.3) return  0;
+        if ($m <   1.0) return  1;
+        if ($m <   2.0) return  2;
+        return 3;
+    }
+
+    private function binT(?float $coil, ?float $prevCoil): int {
+        if (!is_numeric($coil) || !is_numeric($prevCoil)) return 0;
+        $d = $coil - $prevCoil;
+        if ($d < -0.2) return -1;
+        if ($d >  0.2) return  1;
+        return 0;
+    }
+
+    /** New readable state key: N|D|C|T (no window bin) */
+    private function stateKeyBuckets(array $raw, ?float $prevCoil = null): string {
+        $n = $this->binN((int)($raw['numActiveRooms'] ?? 0));
+        $d = $this->binD((float)($raw['maxDelta'] ?? 0.0));
+        $c = $this->binC(($raw['coilTemp'] ?? null), (float)$this->ReadPropertyFloat('MinCoilTempLearning'));
+        $t = $this->binT(($raw['coilTemp'] ?? null), $prevCoil);
+        return "N{$n}|D{$d}|C{$c}|T{$t}";
     }
 
 
