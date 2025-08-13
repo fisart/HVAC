@@ -968,13 +968,13 @@ class adaptive_HVAC_control extends IPSModule
     {
         $q = $this->loadQTable();
         if (!is_array($q) || empty($q)) {
-            return '<div style="font:500 clamp(12px,1.2vw,18px)/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:8px 0;">Q-Table is empty.</div>';
+            return '<p style="font:500 14px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:8px 0;">Q-Table is empty.</p>';
         }
 
         ksort($q);
         $actions = array_keys($this->getAllowedActionPairs());
 
-        // Load labels map (stateKey → label)
+        // labels map (Q-state key → human label). Falls back to the key if unknown.
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
@@ -983,80 +983,112 @@ class adaptive_HVAC_control extends IPSModule
         foreach ($q as $sa) {
             if (!is_array($sa)) continue;
             foreach ($sa as $v) {
-                $vv = (float)$v;
-                $minQ = min($minQ, $vv);
-                $maxQ = max($maxQ, $vv);
+                $v = (float)$v;
+                if ($v < $minQ) $minQ = $v;
+                if ($v > $maxQ) $maxQ = $v;
             }
         }
 
+        // ---------- Styles ----------
         $html = '<style>
-        .wrap{--fs:clamp(12px,1.05vw,18px);--fs-sm:clamp(11px,0.95vw,16px)}
-        .wrap *{box-sizing:border-box}
-        .legend{font:600 calc(var(--fs)*1.0)/1.35 system-ui,Segoe UI,Roboto,sans-serif;margin:10px 6px 6px;cursor:pointer}
-        .help{font:500 var(--fs)/1.5 system-ui,Segoe UI,Roboto,sans-serif;margin:0 6px 12px;color:#333}
-        .kbd{font:600 calc(var(--fs)*0.85)/1 monospace;padding:.1em .35em;border:1px solid #ddd;border-radius:4px;background:#f9f9f9}
-        .scroll{max-height:70vh;overflow:auto;border:1px solid #e6e6e6;border-radius:8px}
-        .qtbl{border-collapse:collapse;width:100%;table-layout:fixed;font-size:var(--fs-sm)}
-        .qtbl th,.qtbl td{border:1px solid #ccc;padding:.45em .6em;text-align:center;word-wrap:break-word}
-        .qtbl th{background:#f2f2f2;position:sticky;top:0;z-index:1}
-        .qtbl td.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:2;max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        details{margin:0 0 8px}
-        details summary{list-style:none}
-        details summary::-webkit-details-marker{display:none}
-        @media (max-width: 900px){
-            .qtbl th,.qtbl td{padding:.35em .45em}
-            .qtbl td.state{max-width:16ch}
+        :root{
+            --fs: clamp(12px, 1.05vw, 14px);
+            --fs-state: clamp(12px, 1.2vw, 16px);
+            --cell-pad: 6px 8px;
+            --sticky-bg: #fafafa;
+            --head-bg: #f2f2f2;
+            --grid: #ccc;
         }
+        .qt-wrap{max-width:100%; overflow:auto;}
+        .qtbl{border-collapse:collapse; width:100%; table-layout:fixed}
+        .qtbl th,.qtbl td{border:1px solid var(--grid); padding:var(--cell-pad); text-align:center; font:500 var(--fs)/1.3 system-ui, Segoe UI, Roboto, sans-serif; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+        .qtbl th{background:var(--head-bg); position:sticky; top:0; z-index:2}
+        .qtbl td.state,.qtbl th.state{position:sticky; left:0; z-index:3; background:var(--sticky-bg); text-align:left; font-weight:600; font-size:var(--fs-state); white-space:normal; word-break:break-word; max-width:28ch;}
+        .qtbl td.num{white-space:nowrap}
+        .legend, .acc{margin:10px 6px 8px; font:600 14px/1.4 system-ui, Segoe UI, Roboto, sans-serif}
+        .acc summary{cursor:pointer; list-style: disclosure-closed; padding:6px 4px; border-radius:6px; background:#f7f7f7; border:1px solid #e6e6e6}
+        .acc[open] summary{list-style: disclosure-open; background:#f3f3f3}
+        .acc .body{font:500 13px/1.55 system-ui, Segoe UI, Roboto, sans-serif; color:#333; padding:8px 10px 10px}
+        .kbd{font:600 12px/1 monospace; padding:1px 4px; border:1px solid #ddd; border-radius:4px; background:#f9f9f9}
         </style>';
 
-        // Collapsible helper with bucket ranges (click header to toggle)
-        $html .= '<div class="wrap">
-        <details>
-            <summary class="legend">How to read the Q-table</summary>
-            <div class="help">
-            Each row is a <b>state</b>, each column an <b>action</b> (<span class="kbd">Power:Fan</span> in %).<br>
-            Cells show the learned Q-value (higher is better). Soft green = better, soft red = worse.<br><br>
-            <b>State key:</b> <span class="kbd">N=… | Δ=… | Coil=…</span> (label), internal key: <span class="kbd">N#|D#|C#|T#</span><br>
-            • <b>N</b> (active rooms): buckets 0,1,2,3,4+.<br>
-            • <b>Δ</b> (overshoot °C): bins 0..7 → ≤0.3, ≤0.6, ≤1.0, ≤1.5, ≤2.5, ≤3.5, ≤5.0, &gt;5.0.<br>
-            • <b>Coil</b> (margin to MinCoilTempLearning): C=−3..+3 → ≤−2.0, ≤−1.0, ≤−0.3, &lt;0.3, &lt;1.0, &lt;2.0, ≥2.0 K.<br>
-            • <b>T</b> (coil trend): −1 falling (cooling), 0 flat (±0.2 K), +1 rising.<br>
-            Tip: If the first row shows a technical key, the human label will appear once that state is observed again.
-            </div>
+        // ---------- Collapsible help ----------
+        $html .= '
+        <details class="acc"><summary>How to read this table</summary>
+        <div class="body">
+            Each row is a <b>state</b>, each column is an <b>action</b> (<span class="kbd">Power:Fan</span> in %).<br>
+            Cells show the learned Q-value (higher is better). Red highlights negatives, green highlights positives.
+            Values are shown with <b>2 decimals</b>; hover to see the exact value (5 decimals).
+            <br><br>
+            <b>Human state label:</b> <span class="kbd">N=… | Δ=… | Coil=…</span><br>
+            • <b>N</b>: number of active rooms with cooling demand.<br>
+            • <b>Δ</b>: maximum overshoot above setpoint (°C).<br>
+            • <b>Coil</b>: coil temperature (°C).<br>
+            If a readable label is not yet known, the technical state key is shown.
+        </div>
+        </details>
+
+        <details class="acc"><summary>Bucket key format (what the learner uses)</summary>
+        <div class="body">
+            Internally, states are bucketed to keep the table compact. The key format is
+            <span class="kbd">N&lt;n&gt;|D&lt;d&gt;|C&lt;c&gt;|T&lt;t&gt;</span>:
+            <ul style="margin:6px 0 0 18px">
+            <li><b>N</b>: active rooms → 0, 1, 2, 3, 4 (means 4 or more)</li>
+            <li><b>D</b>: ΔT bin index (see ranges below)</li>
+            <li><b>C</b>: coil margin bin relative to learning min (see ranges below)</li>
+            <li><b>T</b>: coil trend (−1 cooling, 0 stable, +1 warming)</li>
+            </ul>
+        </div>
+        </details>
+
+        <details class="acc"><summary>Bucket ranges (Δ, Coil, Trend)</summary>
+        <div class="body">
+            <b>Δ (D-bin, overshoot °C):</b> edges at 0.3, 0.6, 1.0, 1.5, 2.5, 3.5, 5.0<br>
+            D0 ≤ 0.3, D1 ≤ 0.6, D2 ≤ 1.0, D3 ≤ 1.5, D4 ≤ 2.5, D5 ≤ 3.5, D6 ≤ 5.0, D7 &gt; 5.0<br><br>
+            <b>Coil margin (C-bin):</b> margin = <span class="kbd">coilTemp − MinCoilTempLearning</span><br>
+            C-3 ≤ −2.0, C-2 ≤ −1.0, C-1 ≤ −0.3, C0 &lt; 0.3, C1 &lt; 1.0, C2 &lt; 2.0, C3 ≥ 2.0<br><br>
+            <b>Trend (T-bin):</b> Δcoil = <span class="kbd">coil − prevCoil</span> → T−1 &lt; −0.2, T0 ∈ [−0.2,+0.2], T+1 &gt; +0.2.
+        </div>
         </details>';
 
-        // Table
-        $html .= '<div class="scroll"><table class="qtbl"><thead><tr><th class="state">State</th>';
-        foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
+        // ---------- Table ----------
+        $html .= '<div class="qt-wrap"><table class="qtbl"><thead><tr><th class="state">State</th>';
+        foreach ($actions as $a) {
+            $html .= '<th>'.htmlspecialchars($a).'</th>';
+        }
         $html .= '</tr></thead><tbody>';
 
         foreach ($q as $sKey => $sa) {
+            if (!is_array($sa)) $sa = [];
             $rowLabel = $labels[$sKey] ?? $sKey;
-            $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
+            $title = ($rowLabel === $sKey) ? ' title="State key: '.$sKey.'"' : ' title="State key: '.$sKey.'"';
+            $html .= '<tr><td class="state"'.$title.'>'.htmlspecialchars($rowLabel).'</td>';
 
             foreach ($actions as $a) {
                 $val = isset($sa[$a]) ? (float)$sa[$a] : 0.0;
 
-                // heatmap color
+                // heat color
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
-                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;         // 0..1
-                        $shade = (int)round(230 - 110 * $p);             // 230→120
+                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0; // 0..1
+                        $shade = (int)round(230 - 110 * $p);     // 230→120
                         $color = sprintf('#%02x%02x%02x', $shade, 255, $shade);
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;         // 0..1
-                        $shade = (int)round(230 - 140 * $p);             // 230→90
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0; // 0..1 (since val and minQ are negative)
+                        $shade = (int)round(230 - 140 * $p);     // 230→90
                         $color = sprintf('#%02x%02x%02x', 255, $shade, $shade);
                     }
                 }
 
-                $html .= '<td style="background:'.$color.'">'.number_format($val, 3).'</td>';
+                $html .= '<td class="num" style="background:'.$color.'" title="'.htmlspecialchars(sprintf('%.5f', $val)).'">'
+                    . number_format($val, 2)
+                    . '</td>';
             }
             $html .= '</tr>';
         }
 
-        $html .= '</tbody></table></div></div>';
+        $html .= '</tbody></table></div>';
 
         return $html;
     }
