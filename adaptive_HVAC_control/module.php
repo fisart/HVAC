@@ -40,7 +40,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('ACActiveLink', 0);
         $this->RegisterPropertyInteger('PowerOutputLink', 0); // kept for legacy; not used directly
         $this->RegisterPropertyInteger('FanOutputLink', 0);   // kept for legacy; not used directly
-
         $this->RegisterPropertyInteger('TimerInterval', 60);
 
         // Actions/Granularity
@@ -89,6 +88,8 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterVariableFloat('CurrentEpsilon', 'Current Epsilon', '', 1);
         $this->RegisterVariableString('QTableJSON', 'Q-Table (JSON)', '~TextBox', 2);
         $this->RegisterVariableString('QTableHTML', 'Q-Table Visualization', '~HTMLBox', 3);
+        $this->RegisterAttributeString('StateLabels', '{}');
+    
     }
 
     public function ApplyChanges()
@@ -211,6 +212,8 @@ class adaptive_HVAC_control extends IPSModule
 
             // Build state and compute metrics for reward shaping
             $state   = $this->buildStateVector();
+            $label = $this->formatStateLabel($state);
+            $this->rememberStateLabel($this->stateKey($state), $label);
             $metrics = $this->computeRoomMetrics();
 
             // Transition update: (prev state,action) -> current state
@@ -275,6 +278,8 @@ class adaptive_HVAC_control extends IPSModule
 
         // Transition update first
         $state   = $this->buildStateVector();
+        $label = $this->formatStateLabel($state);
+        $this->rememberStateLabel($this->stateKey($state), $label);
         $metrics = $this->computeRoomMetrics();
         $prev    = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
         if (is_array($prev) && isset($prev['stateKey'], $prev['action'])) {
@@ -394,6 +399,30 @@ class adaptive_HVAC_control extends IPSModule
             'anyWindowOpen'  => (int)$anyWindow,
             'coilTemp'       => is_finite($coil) ? round($coil, 2) : null
         ];
+    }
+    private function formatStateLabel(array $s): string
+    {
+        $n = (int)($s['numActiveRooms'] ?? 0);
+        $d = is_numeric($s['maxDelta'] ?? null) ? number_format((float)$s['maxDelta'], 1) : 'n/a';
+        $w = (int)($s['anyWindowOpen'] ?? 0);
+        $c = ($s['coilTemp'] === null) ? 'n/a' : number_format((float)$s['coilTemp'], 1).'°C';
+        return "N={$n} | Δ={$d} | W={$w} | Coil={$c}";
+    }
+
+    private function rememberStateLabel(string $sKey, string $label): void
+    {
+        $raw = $this->ReadAttributeString('StateLabels') ?: '{}';
+        $map = json_decode($raw, true);
+        if (!is_array($map)) $map = [];
+        $map[$sKey] = $label;
+
+        // prune if too large (preserve insertion order)
+        if (count($map) > 300) {
+            $map = array_slice($map, -200, null, true);
+        }
+        $this->WriteAttributeString('StateLabels',
+            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
     }
 
     private function computeRoomMetrics(): array
@@ -850,7 +879,10 @@ class adaptive_HVAC_control extends IPSModule
         foreach ($q as $sa) if (is_array($sa)) foreach ($sa as $v) { $minQ = min($minQ,$v); $maxQ = max($maxQ,$v); }
 
         foreach ($q as $s => $sa) {
-            $html .= '<tr><td class="state">'.htmlspecialchars($s).'</td>';
+            $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
+            $rowLabel = is_array($labels) && isset($labels[$s]) ? $labels[$s] : $s;
+            $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
+
             foreach ($actions as $a) {
                 $val = $sa[$a] ?? 0.0;
                 $color = '#f0f0f0';
