@@ -211,13 +211,13 @@ class adaptive_HVAC_control extends IPSModule
 
             // Build state, derive bucket key using coil trend vs previous coil
             $state    = $this->buildStateVector();
-            $this->rememberStateLabel($this->stateKey($state), $this->formatStateLabel($state));
+            $this->rememberStateLabel($sKeyNew, $label);
             $label    = $this->formatStateLabel($state);
             $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
             $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil'])) ? $prevMeta['coil'] : ($state['coilTemp'] ?? null);
 
             $sKeyNew  = $this->stateKeyBuckets($state, $prevCoil);
-            $this->rememberStateLabel($sKeyNew, $label);
+
             $metrics  = $this->computeRoomMetrics();
 
             // Transition update: (prev state,action) -> current bucketed state
@@ -245,11 +245,11 @@ class adaptive_HVAC_control extends IPSModule
 
             // Stash meta for next transition
             $this->SetBuffer('MetaData', json_encode([
-                'stateKey' => $this->stateKey($state),
+                'stateKey' => $sKeyNew,   // was: $this->stateKey($state)
                 'action'   => $p . ':' . $f,
                 'wad'      => $metrics['rawWAD'] ?? 0.0,
                 'coil'     => $metrics['coilTemp'],
-                'maxDelta' => $state['maxDelta'],   // <-- NEW: stash previous comfort error
+                'maxDelta' => $state['maxDelta'],
                 'ts'       => time()
             ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
 
@@ -285,7 +285,6 @@ class adaptive_HVAC_control extends IPSModule
         $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil'])) ? $prevMeta['coil'] : ($state['coilTemp'] ?? null);
 
         $sKeyNew  = $this->stateKeyBuckets($state, $prevCoil);
-        $this->rememberStateLabel($sKeyNew, $label);
         $metrics  = $this->computeRoomMetrics();
 
         if (is_array($prevMeta) && isset($prevMeta['stateKey'], $prevMeta['action'])) {
@@ -300,11 +299,11 @@ class adaptive_HVAC_control extends IPSModule
         $this->UpdateVisualization();
 
         $this->SetBuffer('MetaData', json_encode([
-            'stateKey' => $this->stateKey($state),
+            'stateKey' => $sKeyNew,   // was: $this->stateKey($state)
             'action'   => $p . ':' . $f,
             'wad'      => $metrics['rawWAD'] ?? 0.0,
             'coil'     => $metrics['coilTemp'],
-            'maxDelta' => $state['maxDelta'],   // <-- NEW: stash previous comfort error
+            'maxDelta' => $state['maxDelta'],
             'ts'       => time()
         ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
        // Seed next transition
@@ -525,17 +524,21 @@ class adaptive_HVAC_control extends IPSModule
     private function bestActionForState(array $state, array $allowedKeys): string
     {
         $q = $this->loadQTable();
-        $sKey = $this->stateKey($state);
 
-        $bestVal = -INF;
-        $cands = [];
+        // Use previous coil to compute the same bucket key we use for learning
+        $prev = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+        $prevCoil = (is_array($prev) && isset($prev['coil'])) ? $prev['coil'] : ($state['coilTemp'] ?? null);
+
+        // BUCKETED key (replaces: $sKey = $this->stateKey($state);)
+        $sKey = $this->stateKeyBuckets($state, $prevCoil);
+
+        $bestVal = -INF; $cands = [];
         foreach ($allowedKeys as $k) {
             $val = $q[$sKey][$k] ?? 0.0;
             if ($val > $bestVal) { $bestVal = $val; $cands = [$k]; }
             elseif (abs($val - $bestVal) < 1e-9) { $cands[] = $k; }
         }
         if (count($cands) > 1) {
-            // Prefer higher p+f to avoid 0:0 bias, then random among top2
             usort($cands, function($a,$b){
                 [$ap,$af]=array_map('intval', explode(':',$a));
                 [$bp,$bf]=array_map('intval', explode(':',$b));
@@ -546,6 +549,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         return $cands[0] ?? ($allowedKeys[0] ?? '0:0');
     }
+
 
     // -------------------- Coil / Safety --------------------
 
