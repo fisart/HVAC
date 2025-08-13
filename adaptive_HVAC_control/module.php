@@ -363,6 +363,25 @@ class adaptive_HVAC_control extends IPSModule
         $this->log(3, 'q_update_transition', ['sPrev'=>$sPrev,'aPrev'=>$aPrev,'sNew'=>$sNew,'old'=>$old,'new'=>$new,'r'=>$reward]);
     }
 
+    private function rememberStateLabel(string $sKey, string $label): void
+    {
+        $raw = $this->ReadAttributeString('StateLabels') ?: '{}';
+        $map = json_decode($raw, true);
+        if (!is_array($map)) $map = [];
+
+        $map[$sKey] = $label;
+
+        // keep the map from growing unbounded (preserve insertion order)
+        if (count($map) > 300) {
+            $map = array_slice($map, -200, null, true);
+        }
+
+        $this->WriteAttributeString(
+            'StateLabels',
+            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
+    }
+
     private function buildStateVector(): array
     {
         $rooms = $this->getRooms();
@@ -403,9 +422,10 @@ class adaptive_HVAC_control extends IPSModule
     {
         $n = (int)($s['numActiveRooms'] ?? 0);
         $d = is_numeric($s['maxDelta'] ?? null) ? number_format((float)$s['maxDelta'], 1) : 'n/a';
-        $c = ($s['coilTemp'] === null) ? 'n/a' : number_format((float)$s['coilTemp'], 1).'°C';
+        $c = ($s['coilTemp'] === null) ? 'n/a' : number_format((float)$s['coilTemp'], 1) . '°C';
         return "N={$n} | Δ={$d} | Coil={$c}";
     }
+
   
     
 
