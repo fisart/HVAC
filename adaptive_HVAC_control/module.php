@@ -383,14 +383,13 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        // ZDM Aggregates (still supported)
+        // ZDM aggregates (still used for active rooms / max ΔT)
         $agg = $this->fetchZDMAggregates();
         if ($agg) {
             $numActive = max($numActive, (int)($agg['numActiveRooms'] ?? 0));
             $maxDelta  = max($maxDelta, (float)($agg['maxDeltaT'] ?? 0.0));
         }
 
-        // Coil Temp
         $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
 
         return [
@@ -399,31 +398,16 @@ class adaptive_HVAC_control extends IPSModule
             'coilTemp'       => is_finite($coil) ? round($coil, 2) : null
         ];
     }
-   
+
     private function formatStateLabel(array $s): string
     {
         $n = (int)($s['numActiveRooms'] ?? 0);
         $d = is_numeric($s['maxDelta'] ?? null) ? number_format((float)$s['maxDelta'], 1) : 'n/a';
-        $w = (int)($s['anyWindowOpen'] ?? 0);
         $c = ($s['coilTemp'] === null) ? 'n/a' : number_format((float)$s['coilTemp'], 1).'°C';
-        return "N={$n} | Δ={$d} | W={$w} | Coil={$c}";
+        return "N={$n} | Δ={$d} | Coil={$c}";
     }
-
-    private function rememberStateLabel(string $sKey, string $label): void
-    {
-        $raw = $this->ReadAttributeString('StateLabels') ?: '{}';
-        $map = json_decode($raw, true);
-        if (!is_array($map)) $map = [];
-        $map[$sKey] = $label;
-
-        // prune if too large (preserve insertion order)
-        if (count($map) > 300) {
-            $map = array_slice($map, -200, null, true);
-        }
-        $this->WriteAttributeString('StateLabels',
-            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-        );
-    }
+  
+    
 
     private function computeRoomMetrics(): array
     {
@@ -463,10 +447,11 @@ class adaptive_HVAC_control extends IPSModule
     }
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
     {
-        // Base from v2.8.3 (no window penalty; ZDM handles windows)
+        // Base
         $comfort = -($state['maxDelta'] ?? 0.0);
         $energy  = -0.01 * (($action['p'] ?? 0) + ($action['f'] ?? 0));
 
+        // Change penalty vs last action
         $penalty = 0.0;
         if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
             $dp = abs(((int)$m[1]) - ($action['p'] ?? 0));
@@ -474,7 +459,7 @@ class adaptive_HVAC_control extends IPSModule
             $penalty = -0.002 * ($dp + $df);
         }
 
-        // Shaping from v3.4
+        // Progress (WAD) and coil freeze shaping
         $progress = 0.0;
         if ($metrics && $prevMeta && isset($prevMeta['wad'])) {
             $progress = (($prevMeta['wad'] ?? 0.0) - ($metrics['rawWAD'] ?? 0.0)) * 10.0;
@@ -491,6 +476,7 @@ class adaptive_HVAC_control extends IPSModule
 
         return (float)round($comfort + $energy + $penalty + $progress + $freeze, 4);
     }
+
 
 
     private function bestActionForState(array $state, array $allowedKeys): string
@@ -860,7 +846,6 @@ class adaptive_HVAC_control extends IPSModule
         if (preg_match('/^(\d+):(\d+)$/', $pair, $m)) return ['p'=>(int)$m[1], 'f'=>(int)$m[2]];
         return ['p'=>0, 'f'=>0];
     }
-
     private function GenerateQTableHTML(): string
     {
         $q = $this->loadQTable();
@@ -868,23 +853,17 @@ class adaptive_HVAC_control extends IPSModule
             return '<p style="font-family:sans-serif;font-size:14px;margin:12px">Q-Table is empty. It fills as the system explores and learns.</p>';
         }
 
-        // Sort states and actions
         ksort($q);
         $actions = array_keys($this->getAllowedActionPairs());
         usort($actions, function ($a, $b) {
-            [$ap, $af] = array_map('intval', explode(':', $a));
-            [$bp, $bf] = array_map('intval', explode(':', $b));
+            [$ap,$af]=array_map('intval', explode(':',$a));
+            [$bp,$bf]=array_map('intval', explode(':',$b));
             return ($ap <=> $bp) ?: ($af <=> $bf);
         });
 
-        // Stats & color range
         $minQ = 0.0; $maxQ = 0.0;
-        foreach ($q as $sa) {
-            if (!is_array($sa)) continue;
-            foreach ($sa as $v) { $minQ = min($minQ, (float)$v); $maxQ = max($maxQ, (float)$v); }
-        }
+        foreach ($q as $sa) { if (!is_array($sa)) continue; foreach ($sa as $v) { $minQ=min($minQ,(float)$v); $maxQ=max($maxQ,(float)$v); } }
 
-        // Optional human-readable labels
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
@@ -893,8 +872,7 @@ class adaptive_HVAC_control extends IPSModule
         $actionCount = count($actions);
 
         $html = <<<HTML
-    <!DOCTYPE html>
-    <meta charset="utf-8">
+    <!DOCTYPE html><meta charset="utf-8">
     <style>
     :root { --bd:#ccc; --bg:#f8f8f8; --hdr:#f2f2f2; --txt:#222; --fs:14px; }
     body{font-family:sans-serif;font-size:var(--fs);color:var(--txt);margin:0;padding:12px;}
@@ -927,15 +905,14 @@ class adaptive_HVAC_control extends IPSModule
     <div class="content">
         <p>
         Each <b>row</b> is a <i>state</i> of the system; the left column shows a readable
-        label when available (e.g. <span class="mono">N=3 | Δ=2.4 | W=0 | Coil=17.4°C</span>),
-        otherwise a hash key. Each <b>column</b> is an <i>action</i> (Power:Fan) such as
+        label when available (e.g. <span class="mono">N=3 | Δ=2.4 | Coil=17.4°C</span>),
+        otherwise a hash key. Each <b>column</b> is an <i>action</i> (Power:Fan), e.g.
         <span class="mono">40:80</span>.
         </p>
         <p><b>State label explained</b></p>
         <ul class="tight">
-        <li><span class="mono">N</span> — number of rooms currently demanding cooling (after hysteresis and ZDM rules).</li>
+        <li><span class="mono">N</span> — number of rooms currently demanding cooling (after hysteresis/ZDM).</li>
         <li><span class="mono">Δ</span> — maximum positive temperature overshoot above target among active rooms (°C).</li>
-        <li><span class="mono">W</span> — window flag: <span class="mono">0</span> none open, <span class="mono">1</span> at least one open (from ZDM aggregates).</li>
         <li><span class="mono">Coil</span> — evaporator coil temperature (°C) from <span class="mono">CoilTempLink</span>.</li>
         </ul>
         <p><b>Cells</b></p>
@@ -947,9 +924,9 @@ class adaptive_HVAC_control extends IPSModule
         </ul>
         <div class="legend">
         <span class="muted">Legend:</span>
-        <span class="swatch" style="background:#d6ffd6" title="Higher Q"></span> higher Q
-        <span class="swatch" style="background:#f0f0f0" title="Neutral / unset"></span> neutral
-        <span class="swatch" style="background:#ffd6d6" title="Lower Q"></span> lower Q
+        <span class="swatch" style="background:#d6ffd6"></span> higher Q
+        <span class="swatch" style="background:#f0f0f0"></span> neutral
+        <span class="swatch" style="background:#ffd6d6"></span> lower Q
         </div>
     </div>
     </details>
@@ -967,22 +944,32 @@ class adaptive_HVAC_control extends IPSModule
 
         foreach ($q as $sKey => $stateActions) {
             $rowLabel = $labels[$sKey] ?? $sKey;
+
+            // If old labels still contain " | W=…", strip that segment for display.
+            if (is_string($rowLabel)) {
+                $rowLabel = preg_replace('/\s*\|\s*W\s*=\s*[^|]+/u', '', $rowLabel);
+                $rowLabel = preg_replace('/\s{2,}/', ' ', trim($rowLabel));
+            }
+
             $html .= '<tr><td class="state mono">'.htmlspecialchars((string)$rowLabel).'</td>';
 
             foreach ($actions as $a) {
                 $val = isset($stateActions[$a]) ? (float)$stateActions[$a] : 0.0;
 
-                // background color mapping
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
-                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;           // 0..1
-                        $g = 255; $r = 255 - (int)(100 * max(0,min(1,$p))); $b = 255 - (int)(100 * max(0,min(1,$p)));
-                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);     // pale-green ramp
+                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;
+                        $r = 255 - (int)(100 * max(0,min(1,$p)));
+                        $g = 255;
+                        $b = 255 - (int)(100 * max(0,min(1,$p)));
+                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;            // 0..1
-                        $r = 255; $g = 255 - (int)(150 * max(0,min(1,$p))); $b = 255 - (int)(150 * max(0,min(1,$p)));
-                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);     // pale-red ramp
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;
+                        $r = 255;
+                        $g = 255 - (int)(150 * max(0,min(1,$p)));
+                        $b = 255 - (int)(150 * max(0,min(1,$p)));
+                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);
                     }
                 }
 
@@ -994,6 +981,7 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '</tbody></table>';
         return $html;
     }
+
 
 
     /* ---------- Bucketing helpers + readable state key (ADD) ---------- */
