@@ -874,14 +874,16 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '<table><thead><tr><th class="state">State</th>';
         foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
         $html .= '</tr></thead><tbody>';
-
         $minQ = 0; $maxQ = 0;
         foreach ($q as $sa) if (is_array($sa)) foreach ($sa as $v) { $minQ = min($minQ,$v); $maxQ = max($maxQ,$v); }
 
+        $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
+        if (!is_array($labels)) $labels = [];   // <-- ADD these two lines here
+
+        foreach ($q as $sa) if (is_array($sa)) foreach ($sa as $v) { $minQ = min($minQ,$v); $maxQ = max($maxQ,$v); }
+
         foreach ($q as $s => $sa) {
-            $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
-            $rowLabel = is_array($labels) && isset($labels[$s]) ? $labels[$s] : $s;
-            $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
+            $rowLabel = $labels[$s] ?? $s;  // <-- uses the map decoded above           $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
 
             foreach ($actions as $a) {
                 $val = $sa[$a] ?? 0.0;
