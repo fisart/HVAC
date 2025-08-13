@@ -861,7 +861,6 @@ class adaptive_HVAC_control extends IPSModule
         if (preg_match('/^(\d+):(\d+)$/', $pair, $m)) return ['p'=>(int)$m[1], 'f'=>(int)$m[2]];
         return ['p'=>0, 'f'=>0];
     }
-
     private function GenerateQTableHTML(): string
     {
         $q = $this->loadQTable();
@@ -870,34 +869,49 @@ class adaptive_HVAC_control extends IPSModule
         ksort($q);
         $actions = array_keys($this->getAllowedActionPairs());
 
-        $html = '<style>body{font-family:sans-serif;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:4px;text-align:center}th{background:#f2f2f2;position:sticky;top:0}td.state{text-align:left;font-weight:bold;background:#f8f8f8;position:sticky;left:0}</style>';
+        $html  = '<style>body{font-family:sans-serif;font-size:12px}table{border-collapse:collapse;width:100%}';
+        $html .= 'th,td{border:1px solid #ccc;padding:4px;text-align:center}th{background:#f2f2f2;position:sticky;top:0}';
+        $html .= 'td.state{text-align:left;font-weight:bold;background:#f8f8f8;position:sticky;left:0}</style>';
         $html .= '<table><thead><tr><th class="state">State</th>';
         foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
         $html .= '</tr></thead><tbody>';
+
+        // find global min/max (excluding empty states)
         $minQ = 0; $maxQ = 0;
-        foreach ($q as $sa) if (is_array($sa)) foreach ($sa as $v) { $minQ = min($minQ,$v); $maxQ = max($maxQ,$v); }
+        foreach ($q as $sa) {
+            if (!is_array($sa)) continue;
+            foreach ($sa as $v) { $minQ = min($minQ, $v); $maxQ = max($maxQ, $v); }
+        }
 
+        // decode state labels once
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
-        if (!is_array($labels)) $labels = [];   // <-- ADD these two lines here
-
-        foreach ($q as $sa) if (is_array($sa)) foreach ($sa as $v) { $minQ = min($minQ,$v); $maxQ = max($maxQ,$v); }
+        if (!is_array($labels)) $labels = [];
 
         foreach ($q as $s => $sa) {
-            $rowLabel = $labels[$s] ?? $s;  // <-- uses the map decoded above           $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
+            // ✅ this was commented out before
+            $rowLabel = $labels[$s] ?? $s;
+            $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
 
             foreach ($actions as $a) {
                 $val = $sa[$a] ?? 0.0;
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
-                    if ($val >= 0) { $p = ($maxQ>0)?($val/$maxQ):0; $color = sprintf('#%02x%02x%02x', 255-(int)(100*$p),255,255-(int)(100*$p)); }
-                    else { $p = ($minQ<0)?($val/$minQ):0; $color = sprintf('#%02x%02x%02x',255,255-(int)(150*$p),255-(int)(150*$p)); }
+                    if ($val >= 0) {
+                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0;
+                        $color = sprintf('#%02x%02x%02x', 255 - (int)(100 * $p), 255, 255 - (int)(100 * $p));
+                    } else {
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0;
+                        $color = sprintf('#%02x%02x%02x', 255, 255 - (int)(150 * $p), 255 - (int)(150 * $p));
+                    }
                 }
-                $html .= '<td style="background:'.$color.'">'.number_format($val,2).'</td>';
+                $html .= '<td style="background:'.$color.'">'.number_format($val, 2).'</td>';
             }
             $html .= '</tr>';
         }
+
         return $html.'</tbody></table>';
     }
+
 
     // -------------------- Logging --------------------
 
