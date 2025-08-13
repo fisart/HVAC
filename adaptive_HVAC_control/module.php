@@ -860,56 +860,133 @@ class adaptive_HVAC_control extends IPSModule
         if (preg_match('/^(\d+):(\d+)$/', $pair, $m)) return ['p'=>(int)$m[1], 'f'=>(int)$m[2]];
         return ['p'=>0, 'f'=>0];
     }
+
     private function GenerateQTableHTML(): string
     {
         $q = $this->loadQTable();
-        if (!is_array($q) || empty($q)) return '<p>Q-Table is empty.</p>';
-
-        ksort($q);
-        $actions = array_keys($this->getAllowedActionPairs());
-
-        $html  = '<style>body{font-family:sans-serif;font-size:12px}table{border-collapse:collapse;width:100%}';
-        $html .= 'th,td{border:1px solid #ccc;padding:4px;text-align:center}th{background:#f2f2f2;position:sticky;top:0}';
-        $html .= 'td.state{text-align:left;font-weight:bold;background:#f8f8f8;position:sticky;left:0}</style>';
-        $html .= '<table><thead><tr><th class="state">State</th>';
-        foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
-        $html .= '</tr></thead><tbody>';
-
-        // find global min/max (excluding empty states)
-        $minQ = 0; $maxQ = 0;
-        foreach ($q as $sa) {
-            if (!is_array($sa)) continue;
-            foreach ($sa as $v) { $minQ = min($minQ, $v); $maxQ = max($maxQ, $v); }
+        if (!is_array($q) || empty($q)) {
+            return '<p>Q-Table is empty. It fills as the system explores and learns.</p>';
         }
 
-        // decode state labels once
+        // Sort states and actions
+        ksort($q);
+        $actions = array_keys($this->getAllowedActionPairs());
+        usort($actions, function ($a, $b) {
+            [$ap, $af] = array_map('intval', explode(':', $a));
+            [$bp, $bf] = array_map('intval', explode(':', $b));
+            return ($ap <=> $bp) ?: ($af <=> $bf);
+        });
+
+        // Stats & color range
+        $minQ = 0.0; $maxQ = 0.0;
+        foreach ($q as $sa) {
+            if (!is_array($sa)) continue;
+            foreach ($sa as $v) { $minQ = min($minQ, (float)$v); $maxQ = max($maxQ, (float)$v); }
+        }
+
+        // Optional human-readable labels (if present)
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
-        foreach ($q as $s => $sa) {
-            // ✅ this was commented out before
-            $rowLabel = $labels[$s] ?? $s;
-            $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
+        $eps = (float)$this->ReadAttributeFloat('Epsilon');
+        $stateCount  = count($q);
+        $actionCount = count($actions);
+
+        $html = <<<HTML
+    <!DOCTYPE html>
+    <meta charset="utf-8">
+    <style>
+    :root { --bd:#ccc; --bg:#f8f8f8; --hdr:#f2f2f2; --txt:#222; }
+    body{font-family:sans-serif;font-size:12px;color:var(--txt);margin:0;padding:12px;}
+    .hdr{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:0 0 10px 0}
+    .chip{background:#eef;border:1px solid #dde;border-radius:999px;padding:2px 8px}
+    details.guide{margin:8px 0 12px 0;border:1px solid var(--bd);background:#fafafa;border-radius:8px}
+    details.guide > summary{cursor:pointer;font-weight:600;padding:8px 10px}
+    .guide .content{padding:0 12px 10px 12px;line-height:1.45}
+    .legend{display:flex;align-items:center;gap:10px;margin:6px 0 2px 12px;flex-wrap:wrap}
+    .swatch{width:18px;height:14px;border:1px solid var(--bd)}
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid var(--bd);padding:4px;text-align:center;white-space:nowrap}
+    thead th{background:var(--hdr);position:sticky;top:0;z-index:2}
+    td.state{position:sticky;left:0;background:var(--bg);text-align:left;font-weight:bold;z-index:1}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
+    .muted{opacity:.75}
+    </style>
+
+    <div class="hdr">
+    <div class="chip">States: {$stateCount}</div>
+    <div class="chip">Actions: {$actionCount}</div>
+    <div class="chip">ε: {number_format($eps,3)}</div>
+    <div class="chip">Qmin: {number_format($minQ,2)} • Qmax: {number_format($maxQ,2)}</div>
+    </div>
+
+    <details class="guide" open>
+    <summary>How to read this table</summary>
+    <div class="content">
+        <p>
+        Each <b>row</b> is a <i>state</i> of the system; the left column shows a readable
+        label when available (e.g. <span class="mono">N=2 | Δ=1.5 | Coil=6.0°C</span>),
+        otherwise a hash key. Each <b>column</b> is an <i>action</i> (Power:Fan) such as
+        <span class="mono">40:80</span>.
+        </p>
+        <ul>
+        <li><b>Cell value</b>: the learned Q-value (expected discounted reward) for taking that action in that state.</li>
+        <li><b>Colors</b>: greenish = better (higher Q), reddish = worse (lower Q), grey = neutral/unknown.</li>
+        <li><b>0:0</b> is the hard-off action. Depending on demand logic, it may be avoided during selection.</li>
+        <li><b>Epsilon (ε)</b> shows current exploration rate; higher ε ⇒ more random exploration.</li>
+        <li>Q-values update on <i>transitions</i>: (previous state, previous action) → current state.</li>
+        </ul>
+        <div class="legend">
+        <span class="muted">Legend:</span>
+        <span class="swatch" style="background:#d6ffd6" title="Higher Q"></span> higher Q
+        <span class="swatch" style="background:#f0f0f0" title="Neutral / unset"></span> neutral
+        <span class="swatch" style="background:#ffd6d6" title="Lower Q"></span> lower Q
+        </div>
+        <p class="muted">Tip: cells stay grey until that (state,action) has been visited and updated at least once.</p>
+    </div>
+    </details>
+
+    <table>
+    <thead>
+        <tr>
+        <th class="state">State</th>
+    HTML;
+
+        foreach ($actions as $a) {
+            $html .= '<th class="mono">'.htmlspecialchars($a).'</th>';
+        }
+        $html .= "</tr></thead><tbody>";
+
+        foreach ($q as $sKey => $stateActions) {
+            $rowLabel = $labels[$sKey] ?? $sKey; // fall back to hashed key
+            $html .= '<tr><td class="state mono">'.htmlspecialchars((string)$rowLabel).'</td>';
 
             foreach ($actions as $a) {
-                $val = $sa[$a] ?? 0.0;
+                $val = isset($stateActions[$a]) ? (float)$stateActions[$a] : 0.0;
+
+                // background color mapping (same idea as before, but robust)
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
-                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0;
-                        $color = sprintf('#%02x%02x%02x', 255 - (int)(100 * $p), 255, 255 - (int)(100 * $p));
+                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;           // 0..1
+                        $g = 255; $r = 255 - (int)(100 * max(0,min(1,$p))); $b = 255 - (int)(100 * max(0,min(1,$p)));
+                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);     // pale-green ramp
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0;
-                        $color = sprintf('#%02x%02x%02x', 255, 255 - (int)(150 * $p), 255 - (int)(150 * $p));
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;            // 0..1
+                        $r = 255; $g = 255 - (int)(150 * max(0,min(1,$p))); $b = 255 - (int)(150 * max(0,min(1,$p)));
+                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);     // pale-red ramp
                     }
                 }
+
                 $html .= '<td style="background:'.$color.'">'.number_format($val, 2).'</td>';
             }
             $html .= '</tr>';
         }
 
-        return $html.'</tbody></table>';
+        $html .= '</tbody></table>';
+        return $html;
     }
+
     /* ---------- Bucketing helpers + readable state key (ADD) ---------- */
 
     private function binN(int $n): int {
