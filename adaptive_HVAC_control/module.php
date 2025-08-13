@@ -247,7 +247,9 @@ class adaptive_HVAC_control extends IPSModule
 
             [$p, $f] = $this->selectActionEpsilonGreedy($state, $allowedKeys);
             [$p, $f] = $this->limitDeltas($p, $f);
-
+            if ($adj = $this->validateActionPair($p . ':' . $f)) {
+                [$p, $f] = $adj;
+            }
             // ---- Apply action ----
             $this->applyAction($p, $f);
 
@@ -293,7 +295,9 @@ class adaptive_HVAC_control extends IPSModule
         }
         [$p, $f] = $act;
         [$p, $f] = $this->limitDeltas($p, $f);
-
+        if ($adj = $this->validateActionPair($p . ':' . $f)) {
+            [$p, $f] = $adj;
+        }
         // ---- Build current state and readable bucket key ----
         $state    = $this->buildStateVector();
         $label    = $this->formatStateLabel($state);
@@ -746,11 +750,16 @@ class adaptive_HVAC_control extends IPSModule
         $p = max(0, min(100, $p));
         $f = max(0, min(100, $f));
 
-        $this->commandZDM($p, $f);
+        // Snap to grid here as well (extra safety)
+        if ($adj = $this->validateActionPair($p . ':' . $f)) {
+            [$p, $f] = $adj;
+        }
 
+        $this->commandZDM($p, $f);
         $this->WriteAttributeString('LastAction', $p.':'.$f);
         $this->log(2, 'apply_action', ['p' => $p, 'f' => $f]);
     }
+
 
     private function limitDeltas(int $p, int $f): array
     {
@@ -762,6 +771,45 @@ class adaptive_HVAC_control extends IPSModule
             if (abs($f - $lf) > $dfMax) $f = ($f > $lf) ? $lf + $dfMax : $lf - $dfMax;
         }
         return [$p, $f];
+    }
+    public function MigrateQTableToAllowed(): void
+    {
+        $allowed = array_keys($this->getAllowedActionPairs());
+        $allowedSet = array_fill_keys($allowed, true);
+
+        $q = $this->loadQTable();
+        $migrated = [];
+
+        foreach ($q as $sKey => $row) {
+            if (!is_array($row)) continue;
+            foreach ($row as $act => $val) {
+                $to = isset($allowedSet[$act]) ? $act : $this->nearestActionKey($act, $allowed);
+                if (!isset($migrated[$sKey][$to])) {
+                    $migrated[$sKey][$to] = (float)$val;
+                } else {
+                    // keep the larger (less negative) value; change to average if you prefer
+                    $migrated[$sKey][$to] = max($migrated[$sKey][$to], (float)$val);
+                }
+            }
+        }
+        $this->storeQTable($migrated);
+        $this->persistQTableIfNeeded();
+        $this->UpdateVisualization();
+        $this->log(2, 'qtable_migrated_to_allowed', ['actions'=>implode(',', $allowed)]);
+    }
+
+    private function nearestActionKey(string $act, array $allowed): string
+    {
+        if (!preg_match('/^\s*(\d{1,3})\s*:\s*(\d{1,3})\s*$/', $act, $m)) return $allowed[0];
+        $p = (int)$m[1]; $f = (int)$m[2];
+
+        $best = $allowed[0]; $bd = PHP_INT_MAX;
+        foreach ($allowed as $k) {
+            [$ap,$af] = array_map('intval', explode(':', $k));
+            $d = ($ap - $p)*($ap - $p) + ($af - $f)*($af - $f);
+            if ($d < $bd) { $bd = $d; $best = $k; }
+        }
+        return $best;
     }
 
     public function setPercent(int $val)
