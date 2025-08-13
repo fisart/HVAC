@@ -175,6 +175,7 @@ class adaptive_HVAC_control extends IPSModule
 
     public function ProcessLearning(): void
     {
+        // Overlap guard
         if (!IPS_SemaphoreEnter('ADHVAC_' . $this->InstanceID, 0)) {
             $this->log(2, 'skip_overlapping_tick');
             return;
@@ -186,10 +187,13 @@ class adaptive_HVAC_control extends IPSModule
                 'ACActiveLink'    => $this->ReadPropertyInteger('ACActiveLink')
             ]);
 
+            // Manual override disables learning/action
             if ($this->ReadPropertyBoolean('ManualOverride')) {
                 $this->log(2, 'manual_override_active');
                 return;
             }
+
+            // AC inactive → ensure outputs are off
             if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
                 $this->applyAction(0, 0);
                 $this->log(3, 'ac_inactive_skip');
@@ -204,113 +208,131 @@ class adaptive_HVAC_control extends IPSModule
                 return;
             }
 
+            // Coil safety
             if (!$this->coilProtectionOk()) {
                 $this->applyAction(0, 0);
                 return;
             }
 
-            // Build state, derive bucket key using coil trend vs previous coil
+            // ---- Build current state and readable bucket key ----
             $state    = $this->buildStateVector();
-            $this->rememberStateLabel($sKeyNew, $label);
             $label    = $this->formatStateLabel($state);
+
             $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-            $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil'])) ? $prevMeta['coil'] : ($state['coilTemp'] ?? null);
+            $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
+                ? (float)$prevMeta['coil']
+                : ($state['coilTemp'] ?? null);
 
-            $sKeyNew  = $this->stateKeyBuckets($state, $prevCoil);
+            // Compute readable/bucket key (no md5)
+            $sKeyNew  = $this->stateKeyBuckets($state, is_numeric($prevCoil) ? (float)$prevCoil : null);
 
+            // Remember label for this row
+            $this->rememberStateLabel($sKeyNew, $label);
+
+            // Metrics for reward shaping
             $metrics  = $this->computeRoomMetrics();
 
-            // Transition update: (prev state,action) -> current bucketed state
+            // ---- Transition update: (prev state, action) -> current bucketed state ----
             if (is_array($prevMeta) && isset($prevMeta['stateKey'], $prevMeta['action'])) {
                 $rewardPrev = $this->calculateReward($state, $this->pairToArray($prevMeta['action']), $metrics, $prevMeta);
                 $this->qlearnUpdateTransition($prevMeta['stateKey'], $prevMeta['action'], $rewardPrev, $sKeyNew);
             }
 
-            // Select next action; avoid 0:0 while demand exists
+            // ---- Select next action; avoid 0:0 while demand exists ----
             $allowedKeys = array_keys($this->getAllowedActionPairs());
             $hasDemand   = ($state['numActiveRooms'] ?? 0) > 0 || $hasZdm;
             if ($hasDemand) {
                 $allowedKeys = array_values(array_filter($allowedKeys, fn($k) => $k !== '0:0'));
             }
+
             [$p, $f] = $this->selectActionEpsilonGreedy($state, $allowedKeys);
             [$p, $f] = $this->limitDeltas($p, $f);
 
-            // Apply action
+            // ---- Apply action ----
             $this->applyAction($p, $f);
 
-            // Epsilon, persist, UI
+            // ---- Housekeeping: epsilon, persistence, UI ----
             $this->annealEpsilon();
             $this->persistQTableIfNeeded();
             $this->UpdateVisualization();
 
-            // Stash meta for next transition
+            // ---- Stash meta for next transition (store BUCKET KEY!) ----
             $this->SetBuffer('MetaData', json_encode([
-                'stateKey' => $sKeyNew,   // was: $this->stateKey($state)
+                'stateKey' => $sKeyNew,                 // <-- bucket key
                 'action'   => $p . ':' . $f,
                 'wad'      => $metrics['rawWAD'] ?? 0.0,
                 'coil'     => $metrics['coilTemp'],
                 'maxDelta' => $state['maxDelta'],
                 'ts'       => time()
-            ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 
         } finally {
             IPS_SemaphoreLeave('ADHVAC_' . $this->InstanceID);
         }
     }
+  
 
     // -------------------- Orchestrator API --------------------
     public function ForceActionAndLearn(string $pair): string
     {
+        // Demand & safety gates
         if (!$this->hasZdmCoolingDemand()) {
             $this->applyAction(0, 0);
-            return json_encode(['ok'=>false,'err'=>'zdm_no_demand']);
+            return json_encode(['ok' => false, 'err' => 'zdm_no_demand']);
         }
         if (!$this->coilProtectionOk()) {
             $this->applyAction(0, 0);
-            return json_encode(['ok'=>false,'err'=>'coil_protection']);
+            return json_encode(['ok' => false, 'err' => 'coil_protection']);
         }
 
+        // Validate/limit action
         $act = $this->validateActionPair($pair);
         if (!$act) {
-            $this->log(1, 'force_invalid_pair', ['pair'=>$pair]);
-            return json_encode(['ok'=>false,'err'=>'invalid_pair']);
+            $this->log(1, 'force_invalid_pair', ['pair' => $pair]);
+            return json_encode(['ok' => false, 'err' => 'invalid_pair']);
         }
         [$p, $f] = $act;
         [$p, $f] = $this->limitDeltas($p, $f);
 
-        // Build state and transition using bucket key
+        // ---- Build current state and readable bucket key ----
         $state    = $this->buildStateVector();
         $label    = $this->formatStateLabel($state);
-        $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil'])) ? $prevMeta['coil'] : ($state['coilTemp'] ?? null);
 
-        $sKeyNew  = $this->stateKeyBuckets($state, $prevCoil);
+        $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
+            ? (float)$prevMeta['coil']
+            : ($state['coilTemp'] ?? null);
+
+        $sKeyNew  = $this->stateKeyBuckets($state, is_numeric($prevCoil) ? (float)$prevCoil : null);
+        $this->rememberStateLabel($sKeyNew, $label);
+
         $metrics  = $this->computeRoomMetrics();
 
+        // ---- Transition update using previous meta ----
         if (is_array($prevMeta) && isset($prevMeta['stateKey'], $prevMeta['action'])) {
             $rewardPrev = $this->calculateReward($state, $this->pairToArray($prevMeta['action']), $metrics, $prevMeta);
             $this->qlearnUpdateTransition($prevMeta['stateKey'], $prevMeta['action'], $rewardPrev, $sKeyNew);
         }
 
-        // Apply forced action, persist, UI
+        // ---- Apply forced action, persist, UI ----
         $this->applyAction($p, $f);
-        $this->WriteAttributeString('LastAction', $p.':'.$f);
+        $this->WriteAttributeString('LastAction', $p . ':' . $f);
         $this->persistQTableIfNeeded();
         $this->UpdateVisualization();
 
+        // ---- Seed next transition (store BUCKET KEY!) ----
         $this->SetBuffer('MetaData', json_encode([
-            'stateKey' => $sKeyNew,   // was: $this->stateKey($state)
+            'stateKey' => $sKeyNew,                 // <-- bucket key
             'action'   => $p . ':' . $f,
             'wad'      => $metrics['rawWAD'] ?? 0.0,
             'coil'     => $metrics['coilTemp'],
             'maxDelta' => $state['maxDelta'],
             'ts'       => time()
-        ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
-       // Seed next transition
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 
-        return json_encode(['ok'=>true, 'applied'=>['p'=>$p,'f'=>$f]]);
+        return json_encode(['ok' => true, 'applied' => ['p' => $p, 'f' => $f]]);
     }
-
+  
 
     public function ResetLearning(): void
     {
