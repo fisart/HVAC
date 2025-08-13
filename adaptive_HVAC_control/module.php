@@ -978,7 +978,7 @@ class adaptive_HVAC_control extends IPSModule
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
-        // Heatmap range
+        // --- compute heatmap range ---
         $minQ = 0.0; $maxQ = 0.0;
         foreach ($q as $sa) {
             if (!is_array($sa)) continue;
@@ -989,25 +989,30 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        // ---------- Styles ----------
+        // --- compute dynamic width for the State column (in ch) ---
+        $maxChars = 0;
+        foreach ($q as $sKey => $_) {
+            $lab = $labels[$sKey] ?? $sKey;
+            $len = function_exists('mb_strlen') ? mb_strlen($lab) : strlen($lab);
+            if ($len > $maxChars) $maxChars = $len;
+        }
+        // scale from characters to a sensible width; bound to avoid extremes
+        // tweak the 0.72 factor if you want it tighter/looser with your font
+        $stateCh = (int)max(18, min(ceil($maxChars * 0.72), 44)); // 18ch..44ch
+
+        // ---------- styles ----------
         $html = '<style>
         :root{
             --fs: clamp(12px, 1.05vw, 14px);
-            --fs-state: clamp(12px, 1.2vw, 16px);
+            --fs-state: clamp(12px, 1.15vw, 15px);
             --cell-pad: 6px 8px;
             --sticky-bg: #fafafa;
             --head-bg: #f2f2f2;
             --grid: #ccc;
-
-            /* >>> Adjust these if you want the first column even wider/narrower <<< */
-            --state-col: clamp(240px, 28vw, 420px);
             --num-col: clamp(64px, 6.4vw, 92px);
         }
         .qt-wrap{max-width:100%; overflow:auto;}
         .qtbl{border-collapse:collapse; width:100%; table-layout:fixed}
-        .qtbl col.state-col{width:var(--state-col)}
-        .qtbl col.num-col{width:var(--num-col)}
-
         .qtbl th,.qtbl td{
             border:1px solid var(--grid);
             padding:var(--cell-pad);
@@ -1020,9 +1025,7 @@ class adaptive_HVAC_control extends IPSModule
             position:sticky; left:0; z-index:3;
             background:var(--sticky-bg);
             text-align:left; font-weight:600; font-size:var(--fs-state);
-            white-space:normal; word-break:break-word;
         }
-        .qtbl td.num{white-space:nowrap}
         .legend, .acc{margin:10px 6px 8px; font:600 14px/1.4 system-ui, Segoe UI, Roboto, sans-serif}
         .acc summary{cursor:pointer; list-style: disclosure-closed; padding:6px 4px; border-radius:6px; background:#f7f7f7; border:1px solid #e6e6e6}
         .acc[open] summary{list-style: disclosure-open; background:#f3f3f3}
@@ -1030,51 +1033,20 @@ class adaptive_HVAC_control extends IPSModule
         .kbd{font:600 12px/1 monospace; padding:1px 4px; border:1px solid #ddd; border-radius:4px; background:#f9f9f9}
         </style>';
 
-        // ---------- Collapsible help ----------
-        $html .= '
-        <details class="acc"><summary>How to read this table</summary>
-        <div class="body">
-            Each row is a <b>state</b>, each column is an <b>action</b> (<span class="kbd">Power:Fan</span> in %).<br>
-            Cells show the learned Q-value (higher is better). Red highlights negatives, green highlights positives.
-            Values are shown with <b>2 decimals</b>; hover to see the exact value (5 decimals).
-            <br><br>
-            <b>Human state label:</b> <span class="kbd">N=… | Δ=… | Coil=…</span><br>
-            • <b>N</b>: number of active rooms with cooling demand.<br>
-            • <b>Δ</b>: maximum overshoot above setpoint (°C).<br>
-            • <b>Coil</b>: coil temperature (°C).<br>
-            If a readable label is not yet known, the technical state key is shown.
-        </div>
-        </details>
-
-        <details class="acc"><summary>Bucket key format (what the learner uses)</summary>
-        <div class="body">
-            Internally, states are bucketed to keep the table compact. The key format is
-            <span class="kbd">N&lt;n&gt;|D&lt;d&gt;|C&lt;c&gt;|T&lt;t&gt;</span>.
-        </div>
-        </details>
-
-        <details class="acc"><summary>Bucket ranges (Δ, Coil, Trend)</summary>
-        <div class="body">
-            <b>Δ (D-bin, overshoot °C):</b> edges at 0.3, 0.6, 1.0, 1.5, 2.5, 3.5, 5.0<br>
-            D0 ≤ 0.3, D1 ≤ 0.6, D2 ≤ 1.0, D3 ≤ 1.5, D4 ≤ 2.5, D5 ≤ 3.5, D6 ≤ 5.0, D7 &gt; 5.0<br><br>
-            <b>Coil margin (C-bin):</b> margin = <span class="kbd">coilTemp − MinCoilTempLearning</span><br>
-            C-3 ≤ −2.0, C-2 ≤ −1.0, C-1 ≤ −0.3, C0 &lt; 0.3, C1 &lt; 1.0, C2 &lt; 2.0, C3 ≥ 2.0<br><br>
-            <b>Trend (T-bin):</b> Δcoil = <span class="kbd">coil − prevCoil</span> → T−1 &lt; −0.2, T0 ∈ [−0.2, +0.2], T+1 &gt; +0.2.
-        </div>
-        </details>';
-
-        // ---------- Table with colgroup to force wide first column ----------
+        // ---------- table ----------
         $html .= '<div class="qt-wrap"><table class="qtbl">';
-        $html .= '<colgroup><col class="state-col">';
-        $html .= str_repeat('<col class="num-col">', count($actions));
-        $html .= '</colgroup>';
+        // use colgroup to pin widths, state column width = computed ch
+        $html .= '<colgroup>
+                    <col style="width: '.$stateCh.'ch">
+                    '.str_repeat('<col style="width: var(--num-col)">', count($actions)).'
+                </colgroup>';
 
-        // Header
+        // header
         $html .= '<thead><tr><th class="state">State</th>';
         foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
         $html .= '</tr></thead><tbody>';
 
-        // Rows
+        // rows
         foreach ($q as $sKey => $sa) {
             if (!is_array($sa)) $sa = [];
             $rowLabel = $labels[$sKey] ?? $sKey;
@@ -1089,17 +1061,17 @@ class adaptive_HVAC_control extends IPSModule
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
-                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0; // 0..1
+                        $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;
                         $shade = (int)round(230 - 110 * $p);     // 230→120
                         $color = sprintf('#%02x%02x%02x', $shade, 255, $shade);
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0; // 0..1
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;
                         $shade = (int)round(230 - 140 * $p);     // 230→90
                         $color = sprintf('#%02x%02x%02x', 255, $shade, $shade);
                     }
                 }
 
-                $html .= '<td class="num" style="background:'.$color.'" title="'.htmlspecialchars(sprintf('%.5f', $val)).'">'
+                $html .= '<td style="background:'.$color.'" title="'.htmlspecialchars(sprintf('%.5f', $val)).'">'
                     . number_format($val, 2)
                     . '</td>';
             }
