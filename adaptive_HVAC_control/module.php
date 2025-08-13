@@ -955,19 +955,34 @@ class adaptive_HVAC_control extends IPSModule
         $dEdges = [0.3, 0.6, 1.0, 1.5, 2.5, 3.5, 5.0];
         $dF = array_map(fn($x)=>$fmt($x), $dEdges);
 
-        // Styles + clickbox UI
+        // Styles
         $html = '<style>
         .qtbl{border-collapse:collapse;width:100%;table-layout:fixed}
         .qtbl th,.qtbl td{border:1px solid #ccc;padding:6px 8px;text-align:center;font:500 13px/1.35 system-ui,Segoe UI,Roboto,sans-serif}
         .qtbl th{background:#f2f2f2;position:sticky;top:0;z-index:1}
         .qtbl td.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:1}
 
-        .legendTitle{font:700 15px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:4px 6px 2px}
-        .helpwrap{margin:6px 6px 10px}
-        .helpwrap label{user-select:none;cursor:pointer;font:600 13px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
-        .helpwrap input{vertical-align:middle;margin-right:6px}
-        .helpbox{display:none;border:1px solid #ddd;border-radius:8px;padding:10px 12px;background:#fbfbfb;margin-top:8px}
-        .helpwrap input:checked ~ .helpbox{display:block}
+        details.collapser{margin:8px 6px 12px}
+        details.collapser > summary{
+            list-style: none;
+            cursor:pointer;
+            user-select:none;
+            padding:8px 10px;
+            font:700 15px/1.3 system-ui,Segoe UI,Roboto,sans-serif;
+            background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;
+        }
+        details.collapser[open] > summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
+        /* custom caret */
+        details.collapser > summary::marker{display:none}
+        details.collapser > summary::before{
+            content:"▸"; margin-right:8px; display:inline-block; transform:translateY(-1px);
+        }
+        details.collapser[open] > summary::before{content:"▾"}
+
+        .helpbox{
+            border:1px solid #d0d7de;border-top:0;border-bottom-left-radius:8px;border-bottom-right-radius:8px;
+            background:#fbfbfb;padding:10px 12px
+        }
         .helpbox .sec{margin:6px 0 0}
         .helpbox .sec b{font-weight:700}
         .helpbox .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
@@ -976,10 +991,9 @@ class adaptive_HVAC_control extends IPSModule
         .kbd{font:600 12px/1 monospace;padding:1px 4px;border:1px solid #ddd;border-radius:4px;background:#f9f9f9}
         </style>';
 
-        // Clickbox legend
-        $html .= '<div class="legendTitle">How to read this table</div>
-        <div class="helpwrap">
-        <label><input type="checkbox"> Show bucket legend & guide</label>
+        // Collapsible legend (header click to open)
+        $html .= '<details class="collapser">
+        <summary>How to read this table</summary>
         <div class="helpbox">
             <div class="sec"><b>Rows</b> = <i>states</i>, <b>Columns</b> = <i>actions</i> (<span class="kbd">Power:Fan</span> in %). Each cell shows the learned Q-value (higher is better). Red ≈ worse, green ≈ better.</div>
             <div class="sec"><b>State label format</b>: <span class="kbd">N=… | Δ=… | Coil=…</span></div>
@@ -1014,14 +1028,14 @@ class adaptive_HVAC_control extends IPSModule
             <li><span class="mono">C3</span>:  ≥ '.$c_p2_0.'°C</li>
             </ul>
 
-            <div class="sec"><b>Trend T (coil change vs. previous)</b>:</div>
+            <div class="sec"><b>Trend T (coil change vs. previous)</b> (used in learning, not shown in label):</div>
             <ul>
             <li><span class="mono">T-1</span>: colder (&lt; −0.2°C)</li>
             <li><span class="mono">T0</span>: ~same (−0.2…+0.2°C)</li>
             <li><span class="mono">T1</span>: warmer (&gt; +0.2°C)</li>
             </ul>
         </div>
-        </div>';
+        </details>';
 
         // Table header
         $html .= '<table class="qtbl"><thead><tr><th class="state">State</th>';
@@ -1057,7 +1071,8 @@ class adaptive_HVAC_control extends IPSModule
 
         return $html;
     }
-   
+
+    
 
 
 
