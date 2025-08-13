@@ -926,11 +926,11 @@ class adaptive_HVAC_control extends IPSModule
         ksort($q);
         $actions = array_keys($this->getAllowedActionPairs());
 
-        // Load labels map (hash → label)
+        // Labels map (hash/readable key -> label)
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
-        // Compute heatmap range
+        // Heatmap range
         $minQ = 0.0; $maxQ = 0.0;
         foreach ($q as $sa) {
             if (!is_array($sa)) continue;
@@ -940,45 +940,103 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        // Styles (bigger text as requested)
+        // --- Bucket legend values (dynamic for coil margins) ---
+        $minL = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
+        $fmt = fn(float $x) => rtrim(rtrim(number_format($x, 1, '.', ''), '0'), '.');
+
+        $c_m2_0 = $fmt($minL - 2.0);
+        $c_m1_0 = $fmt($minL - 1.0);
+        $c_m0_3 = $fmt($minL - 0.3);
+        $c_p0_3 = $fmt($minL + 0.3);
+        $c_p1_0 = $fmt($minL + 1.0);
+        $c_p2_0 = $fmt($minL + 2.0);
+
+        // Δ edges (fixed)
+        $dEdges = [0.3, 0.6, 1.0, 1.5, 2.5, 3.5, 5.0];
+        $dF = array_map(fn($x)=>$fmt($x), $dEdges);
+
+        // Styles + clickbox UI
         $html = '<style>
         .qtbl{border-collapse:collapse;width:100%;table-layout:fixed}
-        .qtbl th,.qtbl td{border:1px solid #ccc;padding:6px 8px;text-align:center;font:500 13px/1.3 system-ui,Segoe UI,Roboto,sans-serif}
+        .qtbl th,.qtbl td{border:1px solid #ccc;padding:6px 8px;text-align:center;font:500 13px/1.35 system-ui,Segoe UI,Roboto,sans-serif}
         .qtbl th{background:#f2f2f2;position:sticky;top:0;z-index:1}
         .qtbl td.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:1}
-        .legend{font:600 14px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:10px 6px 6px}
-        .help{font:500 13px/1.5 system-ui,Segoe UI,Roboto,sans-serif;margin:0 6px 12px;color:#333}
+
+        .legendTitle{font:700 15px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:4px 6px 2px}
+        .helpwrap{margin:6px 6px 10px}
+        .helpwrap label{user-select:none;cursor:pointer;font:600 13px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+        .helpwrap input{vertical-align:middle;margin-right:6px}
+        .helpbox{display:none;border:1px solid #ddd;border-radius:8px;padding:10px 12px;background:#fbfbfb;margin-top:8px}
+        .helpwrap input:checked ~ .helpbox{display:block}
+        .helpbox .sec{margin:6px 0 0}
+        .helpbox .sec b{font-weight:700}
+        .helpbox .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+        .helpbox ul{margin:6px 0 0 18px;padding:0}
+        .helpbox li{margin:2px 0;font:500 13px/1.45 system-ui,Segoe UI,Roboto,sans-serif}
         .kbd{font:600 12px/1 monospace;padding:1px 4px;border:1px solid #ddd;border-radius:4px;background:#f9f9f9}
         </style>';
 
-        // Explanation (bigger text + your state legend)
-        $html .= '<div class="legend">How to read this table</div>
-        <div class="help">
-        Each row is a <b>state</b>, each column is an <b>action</b> (<span class="kbd">Power:Fan</span> in %).<br>
-        Cells show the learned Q-value (higher is better). Colors highlight negatives for quick scanning.
-        <br><br>
-        <b>State label format:</b> <span class="kbd">N=… | Δ=… | Coil=…</span><br>
-        • <b>N</b>: number of active rooms with cooling demand.<br>
-        • <b>Δ</b>: maximum temperature overshoot above the setpoint (°C, discretized/rounded).<br>
-        • <b>Coil</b>: current coil temperature (°C, discretized/rounded).<br>
-        <br>
-        The first row may show a technical key if a label was not recorded yet. Once that state occurs again, the label appears.
+        // Clickbox legend
+        $html .= '<div class="legendTitle">How to read this table</div>
+        <div class="helpwrap">
+        <label><input type="checkbox"> Show bucket legend & guide</label>
+        <div class="helpbox">
+            <div class="sec"><b>Rows</b> = <i>states</i>, <b>Columns</b> = <i>actions</i> (<span class="kbd">Power:Fan</span> in %). Each cell shows the learned Q-value (higher is better). Red ≈ worse, green ≈ better.</div>
+            <div class="sec"><b>State label format</b>: <span class="kbd">N=… | Δ=… | Coil=…</span></div>
+
+            <div class="sec"><b>N (active rooms)</b> buckets:</div>
+            <ul>
+            <li><span class="mono">N0</span> = 0 rooms</li>
+            <li><span class="mono">N1</span> = 1 room, <span class="mono">N2</span> = 2 rooms, <span class="mono">N3</span> = 3 rooms</li>
+            <li><span class="mono">N4</span> = 4 or more rooms</li>
+            </ul>
+
+            <div class="sec"><b>Δ (max overshoot above setpoint, °C)</b> buckets:</div>
+            <ul>
+            <li><span class="mono">D0</span>: ≤ '.$dF[0].'</li>
+            <li><span class="mono">D1</span>: ('.$dF[0].' – '.$dF[1].']</li>
+            <li><span class="mono">D2</span>: ('.$dF[1].' – '.$dF[2].']</li>
+            <li><span class="mono">D3</span>: ('.$dF[2].' – '.$dF[3].']</li>
+            <li><span class="mono">D4</span>: ('.$dF[3].' – '.$dF[4].']</li>
+            <li><span class="mono">D5</span>: ('.$dF[4].' – '.$dF[5].']</li>
+            <li><span class="mono">D6</span>: ('.$dF[5].' – '.$dF[6].']</li>
+            <li><span class="mono">D7</span>: > '.$dF[6].'</li>
+            </ul>
+
+            <div class="sec"><b>Coil (°C) vs learning minimum '.$fmt($minL).'°C</b> buckets:</div>
+            <ul>
+            <li><span class="mono">C-3</span>: ≤ '.$c_m2_0.'°C</li>
+            <li><span class="mono">C-2</span>: ('.$c_m2_0.' – '.$c_m1_0.']°C</li>
+            <li><span class="mono">C-1</span>: ('.$c_m1_0.' – '.$c_m0_3.']°C</li>
+            <li><span class="mono">C0</span>:  ['.$c_m0_3.' – '.$c_p0_3.')°C</li>
+            <li><span class="mono">C1</span>:  ['.$c_p0_3.' – '.$c_p1_0.')°C</li>
+            <li><span class="mono">C2</span>:  ['.$c_p1_0.' – '.$c_p2_0.')°C</li>
+            <li><span class="mono">C3</span>:  ≥ '.$c_p2_0.'°C</li>
+            </ul>
+
+            <div class="sec"><b>Trend T (coil change vs. previous)</b>:</div>
+            <ul>
+            <li><span class="mono">T-1</span>: colder (&lt; −0.2°C)</li>
+            <li><span class="mono">T0</span>: ~same (−0.2…+0.2°C)</li>
+            <li><span class="mono">T1</span>: warmer (&gt; +0.2°C)</li>
+            </ul>
+        </div>
         </div>';
 
-        // Header
+        // Table header
         $html .= '<table class="qtbl"><thead><tr><th class="state">State</th>';
         foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
         $html .= '</tr></thead><tbody>';
 
         // Rows
         foreach ($q as $sKey => $sa) {
-            $rowLabel = $labels[$sKey] ?? $sKey; // fall back to hash if unseen
+            $rowLabel = $labels[$sKey] ?? $sKey; // fallback to key/hash if no label stored yet
             $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
 
             foreach ($actions as $a) {
                 $val = isset($sa[$a]) ? (float)$sa[$a] : 0.0;
 
-                // heatmap color (light red for negatives, light green for positives)
+                // heatmap color
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
@@ -986,12 +1044,11 @@ class adaptive_HVAC_control extends IPSModule
                         $shade = (int)round(230 - 110 * $p); // 230→120
                         $color = sprintf('#%02x%02x%02x', $shade, 255, $shade);
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0; // val/minQ in [0..1]
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0; // in [0..1]
                         $shade = (int)round(230 - 140 * $p); // 230→90
                         $color = sprintf('#%02x%02x%02x', 255, $shade, $shade);
                     }
                 }
-
                 $html .= '<td style="background:'.$color.'">'.number_format($val, 2).'</td>';
             }
             $html .= '</tr>';
@@ -1000,6 +1057,7 @@ class adaptive_HVAC_control extends IPSModule
 
         return $html;
     }
+   
 
 
 
