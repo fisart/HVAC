@@ -1,18 +1,18 @@
 <?php
 /**
- * Adaptive HVAC Control 
+ * Adaptive HVAC Control (Unified)
  *
- * Version: 2.8.3 (GetActionPairs API + ZDM demand gate + mode mapping)
+ * Version: 3.5 (ZDM master + transition Q-learning + visualization + safety)
  * Author:  Artur Fischer & AI Consultant
  *
- * - Q-Learning mit Epsilon (Start/Min/Decay)
- * - Coil-Schutz:
- *     * Emergency cutoff via EmergencyCoilTempLink (hard stop, z.B. ≤ 0 °C)
- *     * Learning limit via MinCoilTempLearning (z.B. 2 °C)
- *     * Drop-rate Watchdog
- * - ZDM-Aggregate optional im State
- * - Q-Table atomar in Datei (optional) oder Attribut
- * - Konsistentes Logging in Meldungen
+ * - ZDM orchestrates ticks (ACIPS timer disabled)
+ * - Q-Learning with epsilon (start/min/decay)
+ * - Proper transition update (prev → new) using MetaData buffer
+ * - Reward shaping: comfort, energy, window, change penalty, progress (WAD), freeze penalty
+ * - Coil safety gates: emergency cutoff, learning min, drop-rate watchdog
+ * - Uses ZDM aggregates for demand/rooms; commands hardware via ZDM only
+ * - Q-Table atomic file persistence (optional) or attribute
+ * - Visualization variables: CurrentEpsilon, QTableJSON, QTableHTML
  */
 
 declare(strict_types=1);
@@ -25,7 +25,7 @@ class adaptive_HVAC_control extends IPSModule
     {
         parent::Create();
 
-        // Bestehende Properties
+        // Core properties
         $this->RegisterPropertyBoolean('ManualOverride', false);
         $this->RegisterPropertyInteger('LogLevel', 3); // 0=ERROR,1=WARN,2=INFO,3=DEBUG
 
@@ -38,75 +38,76 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
 
         $this->RegisterPropertyInteger('ACActiveLink', 0);
-        $this->RegisterPropertyInteger('PowerOutputLink', 0);
-        $this->RegisterPropertyInteger('FanOutputLink', 0);
+        $this->RegisterPropertyInteger('PowerOutputLink', 0); // kept for legacy; not used directly
+        $this->RegisterPropertyInteger('FanOutputLink', 0);   // kept for legacy; not used directly
 
         $this->RegisterPropertyInteger('TimerInterval', 60);
 
-        // Actions/Granularität
+        // Actions/Granularity
         $this->RegisterPropertyString('CustomPowerLevels', '0,40,80,100');
         $this->RegisterPropertyInteger('PowerStep', 20);
         $this->RegisterPropertyString('CustomFanSpeeds', '0,40,80,100');
         $this->RegisterPropertyInteger('FanStep', 20);
 
-        // Sensoren
+        // Sensors
         $this->RegisterPropertyInteger('CoilTempLink', 0);
 
-        // Räume
+        // Rooms
         $this->RegisterPropertyString('MonitoredRooms', '[]');
 
-        // --- NEU: Epsilon ---
+        // Epsilon
         $this->RegisterPropertyFloat('EpsilonStart', 0.40);
         $this->RegisterPropertyFloat('EpsilonMin',   0.05);
         $this->RegisterPropertyFloat('EpsilonDecay', 0.995);
 
-        // --- NEU: Coil-Safety (neue Namen) ---
-        $this->RegisterPropertyFloat('MinCoilTempLearning', 2.0);     // learning limit, °C
+        // Coil-Safety
+        $this->RegisterPropertyFloat('MinCoilTempLearning', 2.0);     // °C
         $this->RegisterPropertyInteger('EmergencyCoilTempLink', 0);   // emergency cutoff variable link
-
-        // --- Weitere Schutz-Parameter ---
         $this->RegisterPropertyFloat('MaxCoilDropRate', 1.5);         // K/min
         $this->RegisterPropertyBoolean('AbortOnCoilFreeze', true);
 
-        // ZDM-Integration
+        // ZDM Integration
         $this->RegisterPropertyInteger('ZDM_InstanceID', 0);
 
-        // Q-Table Persistenz (optional Datei)
+        // Q-Table persistence (optional file)
         $this->RegisterPropertyString('QTablePath', '');
 
-        // Attribute
+        // Attributes / buffers
         $this->RegisterAttributeFloat('Epsilon', 0.0);
         $this->RegisterAttributeString('QTable', '{}');
         $this->RegisterAttributeString('LastAction', '0:0');
+        $this->RegisterAttributeBoolean('MigratedNaming', false);
+        $this->SetBuffer('MetaData', json_encode([])); // prev state/action/ts + metrics
 
         // Timer → wrapper via module.json prefix (assumed "ACIPS")
         $this->RegisterTimer('LearningTimer', 0, 'ACIPS_ProcessLearning($_IPS[\'TARGET\']);');
-        $this->RegisterAttributeBoolean('MigratedNaming', false);
 
-        // Operating mode for Orchestrator
+        // Operating mode (kept for API compatibility)
         $this->RegisterPropertyInteger('OperatingMode', 2); // 0=Cooling, 1=Heating, 2=Auto/Cooperative
+
+        // Diagnostics / Visualization
+        $this->RegisterVariableFloat('CurrentEpsilon', 'Current Epsilon', '', 1);
+        $this->RegisterVariableString('QTableJSON', 'Q-Table (JSON)', '~TextBox', 2);
+        $this->RegisterVariableString('QTableHTML', 'Q-Table Visualization', '~HTMLBox', 3);
     }
 
     public function ApplyChanges()
     {
-        // parent::ApplyChanges() lädt die Konfiguration aus der Datei.
         parent::ApplyChanges();
 
-        // Der Rest ist einfache Initialisierungslogik.
         $this->SetStatus(102);
-        // ACIPS is now ticked by ZDM → disable internal timer
+        // ZDM is master → disable internal timer
         $this->SetTimerInterval('LearningTimer', 0);
 
         if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
             $this->initExploration();
         }
+        $this->UpdateVisualization();
     }
+
     // -------------------- Public APIs for Orchestrator/UI --------------------
 
-    /**
-     * Accepts int or string and normalizes to 0..2
-     * 0=Cooling, 1=Heating, 2=Auto/Cooperative
-     */
+    /** Normalize mode: 0=Cooling, 1=Heating, 2=Auto/Cooperative */
     public function SetMode(string $mode): void
     {
         $map = [
@@ -118,17 +119,9 @@ class adaptive_HVAC_control extends IPSModule
 
         if (is_string($mode)) {
             $key = mb_strtolower(trim($mode));
-            if (array_key_exists($key, $map)) {
-                $mode = $map[$key];
-            } else {
-                $this->log(1, 'set_mode_unknown_label', ['label' => $mode]);
-                $mode = 2;
-            }
+            $mode = array_key_exists($key, $map) ? $map[$key] : 2;
         }
-        if (!is_int($mode)) {
-            $this->log(1, 'set_mode_type_error', ['given' => gettype($mode)]);
-            $mode = 2;
-        }
+        if (!is_int($mode)) $mode = 2;
         if ($mode < 0) $mode = 0;
         if ($mode > 2) $mode = 2;
 
@@ -143,36 +136,25 @@ class adaptive_HVAC_control extends IPSModule
         return (int)$this->ReadPropertyInteger('OperatingMode');
     }
 
-    /**
-     * Expose all allowed "P:F" pairs for plan generation
-     * Global wrapper => ACIPS_GetActionPairs($id)
-     */
+    /** Expose allowed "P:F" pairs for plan generation */
     public function GetActionPairs(): string
     {
         $allowed = $this->getAllowedActionPairs(); // map "P:F" => true
         return json_encode(array_keys($allowed));
     }
 
-    /**
- * Dies ist eine manuelle Testfunktion, um den gespeicherten Wert
- * einer Eigenschaft direkt und ohne Umwege zu überprüfen.
- */
+    /** Manual property read helper */
     public function TestReadMyProperties()
     {
         $powerID = $this->ReadPropertyInteger('PowerOutputLink');
         $fanID = $this->ReadPropertyInteger('FanOutputLink');
-
-        // Wir geben den Wert direkt im PHP-Konsolen-Fenster aus.
-
-        // Zusätzlich loggen wir es mit höchster Priorität.
         $this->log(2, 'MANUAL_PROPERTY_TEST', [
             'PowerOutputLink_Read' => $powerID,
             'FanOutputLink_Read' => $fanID
         ]);
     }
-    /**
-     * Simple external command hook (optional for Orchestrator)
-     */
+
+    /** Optional external hook (kept) */
     public function CommandSystem(int $powerPercent, int $fanPercent): void
     {
         $powerPercent = max(0, min(100, $powerPercent));
@@ -180,73 +162,104 @@ class adaptive_HVAC_control extends IPSModule
         $this->applyAction($powerPercent, $fanPercent);
     }
 
-    // -------------------- Timer target (called via ACIPS_ProcessLearning wrapper) --------------------
+    public function UpdateVisualization(): void
+    {
+        try { $this->SetValue('CurrentEpsilon', (float)$this->ReadAttributeFloat('Epsilon')); } catch (\Throwable $e) {}
+        try { $this->SetValue('QTableJSON', json_encode($this->loadQTable(), JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)); } catch (\Throwable $e) {}
+        try { $this->SetValue('QTableHTML', $this->GenerateQTableHTML()); } catch (\Throwable $e) {}
+        $this->log(3, 'update_visualization');
+    }
 
-     public function ProcessLearning(): void
-     {
-        // Avoid overlapping ticks if ZDM triggers fast back-to-back
+    // -------------------- Timer target (called by ZDM) --------------------
+
+    public function ProcessLearning(): void
+    {
+        // Overlap guard
         if (!IPS_SemaphoreEnter('ADHVAC_' . $this->InstanceID, 0)) {
             $this->log(2, 'skip_overlapping_tick');
             return;
         }
         try {
             $this->log(3, 'process_learning_start', [
-            'PowerOutputLink' => $this->ReadPropertyInteger('PowerOutputLink'),
-            'FanOutputLink' => $this->ReadPropertyInteger('FanOutputLink'),
-            'ACActiveLink' => $this->ReadPropertyInteger('ACActiveLink')
-        ]);
-        
-        if ($this->ReadPropertyBoolean('ManualOverride')) {
-            $this->log(2, 'manual_override_active');
-            return;
-        }
-        if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
-            $this->applyAction(0, 0);  // Wichtig: Ausgänge auf 0 setzen wenn AC inaktiv
-            $this->log(3, 'ac_inactive_skip');
-            return;
-        }
+                'PowerOutputLink' => $this->ReadPropertyInteger('PowerOutputLink'),
+                'FanOutputLink'   => $this->ReadPropertyInteger('FanOutputLink'),
+                'ACActiveLink'    => $this->ReadPropertyInteger('ACActiveLink')
+            ]);
 
-        // --- ZDM demand gate ---
-        if (!$this->hasZdmCoolingDemand()) {
-            $this->applyAction(0, 0);                  // ensure outputs are off
-            $this->log(2, 'zdm_no_demand_idle');       // do not learn on idle
-            return;
-        }
+            if ($this->ReadPropertyBoolean('ManualOverride')) {
+                $this->log(2, 'manual_override_active');
+                return;
+            }
+            if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
+                $this->applyAction(0, 0);  // ensure outputs off when AC inactive
+                $this->log(3, 'ac_inactive_skip');
+                return;
+            }
 
-        if (!$this->coilProtectionOk()) {
-            $this->applyAction(0, 0);
-            return;
-        }
+            // ZDM demand gate
+            $hasZdm = $this->hasZdmCoolingDemand();
+            if (!$hasZdm) {
+                $this->applyAction(0, 0);
+                $this->log(2, 'zdm_no_demand_idle');
+                return;
+            }
 
-        $state = $this->buildStateVector();
+            if (!$this->coilProtectionOk()) {
+                $this->applyAction(0, 0);
+                return;
+            }
 
-        [$p, $f] = $this->selectActionEpsilonGreedy($state);
-        [$p, $f] = $this->limitDeltas($p, $f);
+            // Build state and compute metrics for reward shaping
+            $state   = $this->buildStateVector();
+            $metrics = $this->computeRoomMetrics();
 
-        $this->applyAction($p, $f);
+            // Transition update: (prev state,action) -> current state
+            $prev = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+            if (is_array($prev) && isset($prev['stateKey'], $prev['action'])) {
+                $rewardPrev = $this->calculateReward($state, $this->pairToArray($prev['action']), $metrics, $prev);
+                $this->qlearnUpdateTransition($prev['stateKey'], $prev['action'], $rewardPrev, $this->stateKey($state));
+            }
 
-        $reward = $this->calculateReward($state, ['p'=>$p, 'f'=>$f]);
+            // Select next action; avoid 0:0 when demand exists
+            $allowedKeys = array_keys($this->getAllowedActionPairs());
+            $hasDemand = ($state['numActiveRooms'] ?? 0) > 0 || $hasZdm;
+            if ($hasDemand) {
+                $allowedKeys = array_values(array_filter($allowedKeys, fn($k) => $k !== '0:0'));
+            }
+            [$p, $f] = $this->selectActionEpsilonGreedy($state, $allowedKeys);
+            [$p, $f] = $this->limitDeltas($p, $f);
 
-        $this->qlearnUpdate($state, $p, $f, $reward, /*explore=*/true);
+            // Apply action
+            $this->applyAction($p, $f);
 
-        $this->annealEpsilon();
-        $this->persistQTableIfNeeded();
+            // Epsilon, persist, diag
+            $this->annealEpsilon();
+            $this->persistQTableIfNeeded();
+            $this->UpdateVisualization();
+
+            // Stash meta for next transition
+            $this->SetBuffer('MetaData', json_encode([
+                'stateKey' => $this->stateKey($state),
+                'action'   => $p . ':' . $f,
+                'wad'      => $metrics['rawWAD'] ?? 0.0,
+                'coil'     => $metrics['coilTemp'],
+                'ts'       => time()
+            ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+
         } finally {
             IPS_SemaphoreLeave('ADHVAC_' . $this->InstanceID);
         }
-     }
-    
+    }
 
-    // -------------------- Orchestrator API (global wrapper: ACIPS_ForceActionAndLearn) --------------------
+    // -------------------- Orchestrator API --------------------
 
     public function ForceActionAndLearn(string $pair): string
     {
-        // --- ZDM demand gate for forced actions ---
+        // Demand & safety
         if (!$this->hasZdmCoolingDemand()) {
             $this->applyAction(0, 0);
             return json_encode(['ok'=>false,'err'=>'zdm_no_demand']);
         }
-
         if (!$this->coilProtectionOk()) {
             $this->applyAction(0, 0);
             return json_encode(['ok'=>false,'err'=>'coil_protection']);
@@ -260,80 +273,84 @@ class adaptive_HVAC_control extends IPSModule
         [$p, $f] = $act;
         [$p, $f] = $this->limitDeltas($p, $f);
 
+        // Transition update first
+        $state   = $this->buildStateVector();
+        $metrics = $this->computeRoomMetrics();
+        $prev    = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+        if (is_array($prev) && isset($prev['stateKey'], $prev['action'])) {
+            $rewardPrev = $this->calculateReward($state, $this->pairToArray($prev['action']), $metrics, $prev);
+            $this->qlearnUpdateTransition($prev['stateKey'], $prev['action'], $rewardPrev, $this->stateKey($state));
+        }
+
+        // Apply forced action, persist, diag
         $this->applyAction($p, $f);
-
-        $state  = $this->buildStateVector();
-        $reward = $this->calculateReward($state, ['p'=>$p, 'f'=>$f]);
-
-        $this->qlearnUpdate($state, $p, $f, $reward, /*explore=*/false);
         $this->WriteAttributeString('LastAction', $p.':'.$f);
         $this->persistQTableIfNeeded();
+        $this->UpdateVisualization();
 
-        return json_encode(['ok'=>true, 'applied'=>['p'=>$p,'f'=>$f], 'reward'=>$reward]);
+        // Seed next transition
+        $this->SetBuffer('MetaData', json_encode([
+            'stateKey' => $this->stateKey($state),
+            'action'   => $p . ':' . $f,
+            'wad'      => $metrics['rawWAD'] ?? 0.0,
+            'coil'     => $metrics['coilTemp'],
+            'ts'       => time()
+        ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+
+        return json_encode(['ok'=>true, 'applied'=>['p'=>$p,'f'=>$f]]);
     }
-
-    // -------------------- Buttons (placeholders so form actions work) --------------------
 
     public function ResetLearning(): void
     {
         $this->initExploration();
         $this->storeQTable([]); // clear
+        $this->SetBuffer('MetaData', json_encode([]));
         $this->persistQTableIfNeeded();
+        $this->UpdateVisualization();
         $this->log(2, 'reset_learning');
-    }
-
-    public function UpdateVisualization(): void
-    {
-        // Hook for your UI; keep as no-op for now
-        $this->log(3, 'update_visualization');
     }
 
     // -------------------- Learning Core --------------------
 
-    private function selectActionEpsilonGreedy(array $state): array
+    private function selectActionEpsilonGreedy(array $state, ?array $allowedKeys = null): array
     {
-        $pairs = $this->getAllowedActionPairs();
-        if (empty($pairs)) return [0, 0];
+        $pairsMap = $this->getAllowedActionPairs();
+        $keys = $allowedKeys ?? array_keys($pairsMap);
+        if (empty($keys)) return [0, 0];
 
         $eps = (float)$this->ReadAttributeFloat('Epsilon');
         if (mt_rand() / mt_getrandmax() < $eps) {
-            $key = array_rand($pairs);
+            $key = $keys[array_rand($keys)];
             [$p, $f] = array_map('intval', explode(':', $key));
             $this->log(3, 'select_explore', ['pair'=>$key,'epsilon'=>$eps]);
             return [$p, $f];
         }
 
-        $bestKey = $this->bestActionForState($state, array_keys($pairs));
+        $bestKey = $this->bestActionForState($state, $keys);
         [$p, $f] = array_map('intval', explode(':', $bestKey));
         $this->log(3, 'select_exploit', ['pair'=>$bestKey,'epsilon'=>$eps]);
         return [$p, $f];
     }
 
-    private function qlearnUpdate(array $state, int $p, int $f, float $reward, bool $explore): void
+    private function qlearnUpdateTransition(string $sPrev, string $aPrev, float $reward, string $sNew): void
     {
         $alpha = (float)$this->ReadPropertyFloat('Alpha');
         $gamma = (float)$this->ReadPropertyFloat('Gamma');
-
         $q = $this->loadQTable();
 
-        $sKey = $this->stateKey($state);
-        $aKey = $p.':'.$f;
+        if (!isset($q[$sPrev])) $q[$sPrev] = [];
+        if (!isset($q[$sPrev][$aPrev])) $q[$sPrev][$aPrev] = 0.0;
+        if (!isset($q[$sNew])) $q[$sNew] = [];
 
-        if (!isset($q[$sKey])) $q[$sKey] = [];
-        if (!isset($q[$sKey][$aKey])) $q[$sKey][$aKey] = 0.0;
+        $maxFuture = 0.0;
+        foreach ($q[$sNew] as $v) if ($v > $maxFuture) $maxFuture = $v;
 
-        $maxNext = 0.0;
-        foreach ($q[$sKey] as $val) {
-            if ($val > $maxNext) $maxNext = $val;
-        }
-
-        $old = $q[$sKey][$aKey];
-        $new = (1 - $alpha) * $old + $alpha * ($reward + $gamma * $maxNext);
-        $q[$sKey][$aKey] = $new;
+        $old = $q[$sPrev][$aPrev];
+        $new = (1 - $alpha) * $old + $alpha * ($reward + $gamma * $maxFuture);
+        $q[$sPrev][$aPrev] = $new;
 
         $this->storeQTable($q);
-        $this->WriteAttributeString('LastAction', $aKey);
-        $this->log(3, 'q_update', ['state'=>$sKey, 'a'=>$aKey, 'old'=>$old, 'new'=>$new, 'r'=>$reward, 'explore'=>$explore]);
+        $this->log(3, 'q_update_transition', ['sPrev'=>$sPrev,'aPrev'=>$aPrev,'sNew'=>$sNew,'old'=>$old,'new'=>$new,'r'=>$reward]);
     }
 
     private function buildStateVector(): array
@@ -379,8 +396,46 @@ class adaptive_HVAC_control extends IPSModule
         ];
     }
 
-    private function calculateReward(array $state, array $action): float
+    private function computeRoomMetrics(): array
     {
+        $rooms = $this->getRooms();
+        $wDevSum = 0.0; $totalSize = 0.0; $D_cold = 0.0; $hotRooms = 0; $maxDev = 0.0;
+
+        foreach ($rooms as $r) {
+            $tid = (int)($r['tempID'] ?? 0);
+            $sid = (int)($r['targetID'] ?? 0);
+            if ($tid <= 0 || $sid <= 0 || !IPS_VariableExists($tid) || !IPS_VariableExists($sid)) continue;
+
+            $ist  = (float)@GetValue($tid);
+            $soll = (float)@GetValue($sid);
+            $dev  = $ist - $soll;
+
+            if ($dev > 0)  $maxDev = max($maxDev, $dev);
+            if ($dev < 0)  $D_cold = max($D_cold, -$dev);
+
+            $th = (float)($r['threshold'] ?? 0.5);
+            if ($dev > $th) {
+                $hotRooms++;
+                $wDevSum   += $dev * (float)($r['size'] ?? 10.0);
+                $totalSize += (float)($r['size'] ?? 10.0);
+            }
+        }
+        $rawWAD = ($totalSize > 0.0) ? ($wDevSum / $totalSize) : 0.0;
+
+        $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
+
+        return [
+            'rawWAD'   => round($rawWAD, 3),
+            'hotRooms' => $hotRooms,
+            'maxDev'   => round($maxDev, 3),
+            'D_cold'   => round($D_cold, 3),
+            'coilTemp' => is_finite($coil) ? round($coil, 3) : null
+        ];
+    }
+
+    private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
+    {
+        // Base from v2.8.3
         $comfort = -($state['maxDelta'] ?? 0.0);
         $energy  = -0.01 * (($action['p'] ?? 0) + ($action['f'] ?? 0));
         $window  = -0.5 * (int)($state['anyWindowOpen'] ?? 0);
@@ -392,7 +447,47 @@ class adaptive_HVAC_control extends IPSModule
             $penalty = -0.002 * ($dp + $df);
         }
 
-        return (float)round($comfort + $energy + $window + $penalty, 4);
+        // Shaping from v3.4
+        $progress = 0.0;
+        if ($metrics && $prevMeta && isset($prevMeta['wad'])) {
+            $progress = (($prevMeta['wad'] ?? 0.0) - ($metrics['rawWAD'] ?? 0.0)) * 10.0;
+        }
+
+        $freeze = 0.0;
+        if ($metrics) {
+            $minL = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
+            $coil = $metrics['coilTemp'];
+            if (is_numeric($coil) && $coil < $minL) {
+                $freeze = -2.0 * ($minL - $coil);
+            }
+        }
+
+        return (float)round($comfort + $energy + $window + $penalty + $progress + $freeze, 4);
+    }
+
+    private function bestActionForState(array $state, array $allowedKeys): string
+    {
+        $q = $this->loadQTable();
+        $sKey = $this->stateKey($state);
+
+        $bestVal = -INF;
+        $cands = [];
+        foreach ($allowedKeys as $k) {
+            $val = $q[$sKey][$k] ?? 0.0;
+            if ($val > $bestVal) { $bestVal = $val; $cands = [$k]; }
+            elseif (abs($val - $bestVal) < 1e-9) { $cands[] = $k; }
+        }
+        if (count($cands) > 1) {
+            // Prefer higher p+f to avoid 0:0 bias, then random among top2
+            usort($cands, function($a,$b){
+                [$ap,$af]=array_map('intval', explode(':',$a));
+                [$bp,$bf]=array_map('intval', explode(':',$b));
+                return ($bp+$bf) <=> ($ap+$af);
+            });
+            $top = array_slice($cands, 0, 2);
+            return $top[array_rand($top)];
+        }
+        return $cands[0] ?? ($allowedKeys[0] ?? '0:0');
     }
 
     // -------------------- Coil / Safety --------------------
@@ -471,15 +566,14 @@ class adaptive_HVAC_control extends IPSModule
     {
         $iid = (int)$this->ReadPropertyInteger('ZDM_InstanceID');
         if ($iid <= 0 || !IPS_InstanceExists($iid)) {
-            return null; // ZDM nicht verknüpft
+            return null; // ZDM not linked
         }
-    
-        // Funktion existiert nicht → ZDM-Modul nicht geladen/registriert
+
         if (!function_exists('ZDM_GetAggregates')) {
             $this->log(1, 'zdm_agg_err', ['msg' => 'ZDM_GetAggregates() not available']);
             return null;
         }
-    
+
         try {
             $json = @ZDM_GetAggregates($iid);
             $arr  = json_decode((string)$json, true);
@@ -489,8 +583,6 @@ class adaptive_HVAC_control extends IPSModule
             return null;
         }
     }
-
-    // -------- ZDM demand detection --------
 
     private function hasZdmCoolingDemand(): bool
     {
@@ -506,7 +598,6 @@ class adaptive_HVAC_control extends IPSModule
             return true;
         }
 
-        // explicit flag if provided
         if (array_key_exists('coolingDemand', $agg)) {
             $cd = $agg['coolingDemand'];
             if (is_bool($cd)) return $cd;
@@ -514,14 +605,13 @@ class adaptive_HVAC_control extends IPSModule
             if (is_string($cd)) return in_array(mb_strtolower(trim($cd)), ['1','true','on','yes'], true);
         }
 
-        // fallback: num active rooms or total demand
         $numActive = (int)($agg['numActiveRooms'] ?? 0);
         $totalCooling = (float)($agg['totalCoolingDemand'] ?? ($agg['totalDemand'] ?? 0.0));
 
         return ($numActive > 0) || ($totalCooling > 0.0);
     }
 
-    // -------------------- Q-Table Persistenz --------------------
+    // -------------------- Q-Table Persistence --------------------
 
     private function persistQTableIfNeeded(): void
     {
@@ -568,17 +658,11 @@ class adaptive_HVAC_control extends IPSModule
 
     // -------------------- Actions / Outputs --------------------
 
-    /**
-     * Wendet die berechneten Leistungs- und Lüfterwerte auf die Ausgänge an.
-     * Diese Funktion ist der zentrale Punkt, um die Hardware zu steuern.
-     * Sie wird von ProcessLearning() mit zwei Ganzzahlen aufgerufen.
-     */
     private function applyAction(int $p, int $f): void
     {
         $p = max(0, min(100, $p));
         $f = max(0, min(100, $f));
 
-        // Leite den Befehl direkt an die neue zentrale Funktion weiter.
         $this->commandZDM($p, $f);
 
         $this->WriteAttributeString('LastAction', $p.':'.$f);
@@ -600,38 +684,16 @@ class adaptive_HVAC_control extends IPSModule
     public function setPercent(int $val)
     {
         $this->log(3, 'setPercent_redirect', ['val' => $val]);
-
-        // Lese den ZULETZT bekannten Fan-Wert aus dem Attribut.
         $lastAction = $this->ReadAttributeString('LastAction');
-        if (preg_match('/^(\d+):(\d+)$/', $lastAction, $m)) {
-            $lastFan = (int)$m[2];
-        } else {
-            $lastFan = 0; // Fallback, falls Attribut leer ist
-        }
-
-        // Leite den Befehl an die neue, zentrale Funktion weiter.
-        // Wir setzen den neuen Power-Wert und behalten den letzten Fan-Wert bei.
+        $lastFan = preg_match('/^(\d+):(\d+)$/', $lastAction, $m) ? (int)$m[2] : 0;
         $this->commandZDM($val, $lastFan);
     }
 
-
-    /**
- * Sets the fan speed percentage on the linked output variable.
- */
     public function setFanSpeed(int $val)
     {
         $this->log(3, 'setFanSpeed_redirect', ['val' => $val]);
-
-        // Lese den ZULETZT bekannten Power-Wert aus dem Attribut.
         $lastAction = $this->ReadAttributeString('LastAction');
-        if (preg_match('/^(\d+):(\d+)$/', $lastAction, $m)) {
-            $lastPower = (int)$m[1];
-        } else {
-            $lastPower = 0; // Fallback
-        }
-
-        // Leite den Befehl an die neue, zentrale Funktion weiter.
-        // Wir behalten den letzten Power-Wert bei und setzen den neuen Fan-Wert.
+        $lastPower  = preg_match('/^(\d+):(\d+)$/', $lastAction, $m) ? (int)$m[1] : 0;
         $this->commandZDM($lastPower, $val);
     }
 
@@ -650,19 +712,14 @@ class adaptive_HVAC_control extends IPSModule
 
         try {
             $this->log(3, 'command_zdm_sending', ['zdm_id' => $zdm_id, 'p' => $power, 'f' => $fan]);
-            
-            // --- KEIN @-Zeichen mehr ---
-            ZDM_CommandSystem($zdm_id, $power, $fan); 
-
+            ZDM_CommandSystem($zdm_id, $power, $fan);
             $this->log(3, 'command_zdm_success', ['zdm_id' => $zdm_id, 'p' => $power, 'f' => $fan]);
-
         } catch (Exception $e) {
-            // --- HIER FANGEN WIR DEN FEHLER AB ---
             $this->log(0, 'command_zdm_error', [
                 'zdm_id' => $zdm_id,
                 'p' => $power,
                 'f' => $fan,
-                'error_message' => $e->getMessage() // Die exakte Fehlermeldung aus dem ZDM
+                'error_message' => $e->getMessage()
             ]);
         }
     }
@@ -673,36 +730,32 @@ class adaptive_HVAC_control extends IPSModule
     {
         $powers = $this->parseIntList($this->ReadPropertyString('CustomPowerLevels'), 0, 100, $this->ReadPropertyInteger('PowerStep'));
         $fans   = $this->parseIntList($this->ReadPropertyString('CustomFanSpeeds'),   0, 100, $this->ReadPropertyInteger('FanStep'));
-    
+
         $map = [];
         foreach ($powers as $p) {
             foreach ($fans as $f) {
                 $map[$p.':'.$f] = true;
             }
         }
-    
-        // --- ALWAYS allow hard-off ---
+        // Always allow hard-off
         $map['0:0'] = true;
-    
         return $map;
     }
+
     private function validateActionPair(string $pair): ?array
     {
         if (!preg_match('/^\s*(\d{1,3})\s*:\s*(\d{1,3})\s*$/', $pair, $m)) return null;
         $p = min(100, max(0, (int)$m[1]));
         $f = min(100, max(0, (int)$m[2]));
-    
-        // --- ALWAYS allow hard-off ---
-        if ($p === 0 && $f === 0) {
-            return [0, 0];
-        }
-    
+
+        if ($p === 0 && $f === 0) return [0, 0];
+
         $allowed = $this->getAllowedActionPairs();
         if (!$allowed) return [$p, $f];
-    
+
         $key = $p.':'.$f;
         if (isset($allowed[$key])) return [$p, $f];
-    
+
         $best = $this->nearestAction($p, $f, array_keys($allowed));
         [$p, $f] = array_map('intval', explode(':', $best));
         $this->log(1, 'action_adjusted_to_allowed', ['req'=>$key,'adj'=>$best]);
@@ -718,21 +771,6 @@ class adaptive_HVAC_control extends IPSModule
             if ($d < $bd) { $bd = $d; $best = $k; }
         }
         return $best ?? '0:0';
-    }
-
-    private function bestActionForState(array $state, array $allowedKeys): string
-    {
-        $q = $this->loadQTable();
-        $sKey = $this->stateKey($state);
-
-        $bestKey = $allowedKeys[0] ?? '0:0';
-        $bestVal = -INF;
-
-        foreach ($allowedKeys as $k) {
-            $val = $q[$sKey][$k] ?? 0.0;
-            if ($val > $bestVal) { $bestVal = $val; $bestKey = $k; }
-        }
-        return $bestKey;
     }
 
     // -------------------- Utils --------------------
@@ -768,7 +806,7 @@ class adaptive_HVAC_control extends IPSModule
 
     private function roomWindowOpen(array $room): bool
     {
-        // Fensterlogik ggf. via ZDM
+        // can be augmented via ZDM if needed
         return false;
     }
 
@@ -787,6 +825,44 @@ class adaptive_HVAC_control extends IPSModule
         if (is_numeric($v))return ((float)$v) > 0;
         if (is_string($v)) return in_array(mb_strtolower(trim($v)), ['1','true','on'], true);
         return false;
+    }
+
+    private function pairToArray(string $pair): array
+    {
+        if (preg_match('/^(\d+):(\d+)$/', $pair, $m)) return ['p'=>(int)$m[1], 'f'=>(int)$m[2]];
+        return ['p'=>0, 'f'=>0];
+    }
+
+    private function GenerateQTableHTML(): string
+    {
+        $q = $this->loadQTable();
+        if (!is_array($q) || empty($q)) return '<p>Q-Table is empty.</p>';
+
+        ksort($q);
+        $actions = array_keys($this->getAllowedActionPairs());
+
+        $html = '<style>body{font-family:sans-serif;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:4px;text-align:center}th{background:#f2f2f2;position:sticky;top:0}td.state{text-align:left;font-weight:bold;background:#f8f8f8;position:sticky;left:0}</style>';
+        $html .= '<table><thead><tr><th class="state">State</th>';
+        foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
+        $html .= '</tr></thead><tbody>';
+
+        $minQ = 0; $maxQ = 0;
+        foreach ($q as $sa) if (is_array($sa)) foreach ($sa as $v) { $minQ = min($minQ,$v); $maxQ = max($maxQ,$v); }
+
+        foreach ($q as $s => $sa) {
+            $html .= '<tr><td class="state">'.htmlspecialchars($s).'</td>';
+            foreach ($actions as $a) {
+                $val = $sa[$a] ?? 0.0;
+                $color = '#f0f0f0';
+                if ($maxQ != $minQ) {
+                    if ($val >= 0) { $p = ($maxQ>0)?($val/$maxQ):0; $color = sprintf('#%02x%02x%02x', 255-(int)(100*$p),255,255-(int)(100*$p)); }
+                    else { $p = ($minQ<0)?($val/$minQ):0; $color = sprintf('#%02x%02x%02x',255,255-(int)(150*$p),255-(int)(150*$p)); }
+                }
+                $html .= '<td style="background:'.$color.'">'.number_format($val,2).'</td>';
+            }
+            $html .= '</tr>';
+        }
+        return $html.'</tbody></table>';
     }
 
     // -------------------- Logging --------------------
