@@ -865,7 +865,7 @@ class adaptive_HVAC_control extends IPSModule
     {
         $q = $this->loadQTable();
         if (!is_array($q) || empty($q)) {
-            return '<p>Q-Table is empty. It fills as the system explores and learns.</p>';
+            return '<p style="font-family:sans-serif;font-size:14px;margin:12px">Q-Table is empty. It fills as the system explores and learns.</p>';
         }
 
         // Sort states and actions
@@ -884,7 +884,7 @@ class adaptive_HVAC_control extends IPSModule
             foreach ($sa as $v) { $minQ = min($minQ, (float)$v); $maxQ = max($maxQ, (float)$v); }
         }
 
-        // Optional human-readable labels (if present)
+        // Optional human-readable labels
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
@@ -896,21 +896,23 @@ class adaptive_HVAC_control extends IPSModule
     <!DOCTYPE html>
     <meta charset="utf-8">
     <style>
-    :root { --bd:#ccc; --bg:#f8f8f8; --hdr:#f2f2f2; --txt:#222; }
-    body{font-family:sans-serif;font-size:12px;color:var(--txt);margin:0;padding:12px;}
+    :root { --bd:#ccc; --bg:#f8f8f8; --hdr:#f2f2f2; --txt:#222; --fs:14px; }
+    body{font-family:sans-serif;font-size:var(--fs);color:var(--txt);margin:0;padding:12px;}
     .hdr{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:0 0 10px 0}
-    .chip{background:#eef;border:1px solid #dde;border-radius:999px;padding:2px 8px}
+    .chip{background:#eef;border:1px solid #dde;border-radius:999px;padding:4px 10px;font-size:15px}
     details.guide{margin:8px 0 12px 0;border:1px solid var(--bd);background:#fafafa;border-radius:8px}
-    details.guide > summary{cursor:pointer;font-weight:600;padding:8px 10px}
-    .guide .content{padding:0 12px 10px 12px;line-height:1.45}
-    .legend{display:flex;align-items:center;gap:10px;margin:6px 0 2px 12px;flex-wrap:wrap}
-    .swatch{width:18px;height:14px;border:1px solid var(--bd)}
+    details.guide > summary{cursor:pointer;font-weight:700;padding:10px 12px;font-size:15px}
+    .guide .content{padding:0 14px 12px 14px;line-height:1.5}
+    .legend{display:flex;align-items:center;gap:10px;margin:6px 0 2px 14px;flex-wrap:wrap}
+    .swatch{width:20px;height:16px;border:1px solid var(--bd)}
     table{border-collapse:collapse;width:100%}
-    th,td{border:1px solid var(--bd);padding:4px;text-align:center;white-space:nowrap}
+    th,td{border:1px solid var(--bd);padding:6px 8px;text-align:center;white-space:nowrap;font-size:14px}
     thead th{background:var(--hdr);position:sticky;top:0;z-index:2}
-    td.state{position:sticky;left:0;background:var(--bg);text-align:left;font-weight:bold;z-index:1}
-    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
-    .muted{opacity:.75}
+    td.state{position:sticky;left:0;background:var(--bg);text-align:left;font-weight:700;z-index:1}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px}
+    .muted{opacity:.8}
+    ul.tight{margin:.3em 0 .8em 1.2em; padding:0}
+    ul.tight li{margin:.15em 0}
     </style>
 
     <div class="hdr">
@@ -925,16 +927,23 @@ class adaptive_HVAC_control extends IPSModule
     <div class="content">
         <p>
         Each <b>row</b> is a <i>state</i> of the system; the left column shows a readable
-        label when available (e.g. <span class="mono">N=2 | Δ=1.5 | Coil=6.0°C</span>),
+        label when available (e.g. <span class="mono">N=3 | Δ=2.4 | W=0 | Coil=17.4°C</span>),
         otherwise a hash key. Each <b>column</b> is an <i>action</i> (Power:Fan) such as
         <span class="mono">40:80</span>.
         </p>
-        <ul>
-        <li><b>Cell value</b>: the learned Q-value (expected discounted reward) for taking that action in that state.</li>
+        <p><b>State label explained</b></p>
+        <ul class="tight">
+        <li><span class="mono">N</span> — number of rooms currently demanding cooling (after hysteresis and ZDM rules).</li>
+        <li><span class="mono">Δ</span> — maximum positive temperature overshoot above target among active rooms (°C).</li>
+        <li><span class="mono">W</span> — window flag: <span class="mono">0</span> none open, <span class="mono">1</span> at least one open (from ZDM aggregates).</li>
+        <li><span class="mono">Coil</span> — evaporator coil temperature (°C) from <span class="mono">CoilTempLink</span>.</li>
+        </ul>
+        <p><b>Cells</b></p>
+        <ul class="tight">
+        <li><b>Value</b> = Q-value (expected discounted reward) for taking that action in that state.</li>
         <li><b>Colors</b>: greenish = better (higher Q), reddish = worse (lower Q), grey = neutral/unknown.</li>
-        <li><b>0:0</b> is the hard-off action. Depending on demand logic, it may be avoided during selection.</li>
+        <li><span class="mono">0:0</span> is hard-off; demand logic may avoid it during selection.</li>
         <li><b>Epsilon (ε)</b> shows current exploration rate; higher ε ⇒ more random exploration.</li>
-        <li>Q-values update on <i>transitions</i>: (previous state, previous action) → current state.</li>
         </ul>
         <div class="legend">
         <span class="muted">Legend:</span>
@@ -942,7 +951,6 @@ class adaptive_HVAC_control extends IPSModule
         <span class="swatch" style="background:#f0f0f0" title="Neutral / unset"></span> neutral
         <span class="swatch" style="background:#ffd6d6" title="Lower Q"></span> lower Q
         </div>
-        <p class="muted">Tip: cells stay grey until that (state,action) has been visited and updated at least once.</p>
     </div>
     </details>
 
@@ -958,13 +966,13 @@ class adaptive_HVAC_control extends IPSModule
         $html .= "</tr></thead><tbody>";
 
         foreach ($q as $sKey => $stateActions) {
-            $rowLabel = $labels[$sKey] ?? $sKey; // fall back to hashed key
+            $rowLabel = $labels[$sKey] ?? $sKey;
             $html .= '<tr><td class="state mono">'.htmlspecialchars((string)$rowLabel).'</td>';
 
             foreach ($actions as $a) {
                 $val = isset($stateActions[$a]) ? (float)$stateActions[$a] : 0.0;
 
-                // background color mapping (same idea as before, but robust)
+                // background color mapping
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
@@ -986,6 +994,7 @@ class adaptive_HVAC_control extends IPSModule
         $html .= '</tbody></table>';
         return $html;
     }
+
 
     /* ---------- Bucketing helpers + readable state key (ADD) ---------- */
 
