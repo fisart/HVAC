@@ -211,6 +211,7 @@ class adaptive_HVAC_control extends IPSModule
 
             // Build state, derive bucket key using coil trend vs previous coil
             $state    = $this->buildStateVector();
+            $this->rememberStateLabel($this->stateKey($state), $this->formatStateLabel($state));
             $label    = $this->formatStateLabel($state);
             $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
             $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil'])) ? $prevMeta['coil'] : ($state['coilTemp'] ?? null);
@@ -511,6 +512,41 @@ class adaptive_HVAC_control extends IPSModule
         return (float)round($comfort + $energy + $window + $penalty + $progress + $freeze + $trend, 4);
     }
  
+    /**
+     * Build a human friendly label from a state vector.
+     * Adjust formatting if you change your state definition.
+     */
+    private function formatStateLabel(array $s): string
+    {
+        $n = (int)($s['numActiveRooms'] ?? 0);
+        $d = is_numeric($s['maxDelta'] ?? null) ? number_format((float)$s['maxDelta'], 1) : 'n/a';
+        $c = ($s['coilTemp'] === null) ? 'n/a' : number_format((float)$s['coilTemp'], 1) . '°C';
+        return "N={$n} | Δ={$d} | Coil={$c}";
+    }
+
+    /**
+     * Persist a mapping from Q-table key (hash) → human label.
+     * Safe to call repeatedly.
+     */
+    private function rememberStateLabel(string $sKey, string $label): void
+    {
+        $raw = $this->ReadAttributeString('StateLabels') ?: '{}';
+        $map = json_decode($raw, true);
+        if (!is_array($map)) $map = [];
+
+        $map[$sKey] = $label;
+
+        // keep map bounded
+        if (count($map) > 300) {
+            // preserve insertion order
+            $map = array_slice($map, -200, null, true);
+        }
+
+        $this->WriteAttributeString(
+            'StateLabels',
+            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
+    }
 
 
     private function bestActionForState(array $state, array $allowedKeys): string
@@ -880,130 +916,80 @@ class adaptive_HVAC_control extends IPSModule
         if (preg_match('/^(\d+):(\d+)$/', $pair, $m)) return ['p'=>(int)$m[1], 'f'=>(int)$m[2]];
         return ['p'=>0, 'f'=>0];
     }
+
     private function GenerateQTableHTML(): string
     {
         $q = $this->loadQTable();
         if (!is_array($q) || empty($q)) {
-            return '<p style="font-family:sans-serif;font-size:14px;margin:12px">Q-Table is empty. It fills as the system explores and learns.</p>';
+            return '<p style="font:500 14px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:8px 0;">Q-Table is empty.</p>';
         }
 
         ksort($q);
         $actions = array_keys($this->getAllowedActionPairs());
-        usort($actions, function ($a, $b) {
-            [$ap,$af]=array_map('intval', explode(':',$a));
-            [$bp,$bf]=array_map('intval', explode(':',$b));
-            return ($ap <=> $bp) ?: ($af <=> $bf);
-        });
 
-        $minQ = 0.0; $maxQ = 0.0;
-        foreach ($q as $sa) { if (!is_array($sa)) continue; foreach ($sa as $v) { $minQ=min($minQ,(float)$v); $maxQ=max($maxQ,(float)$v); } }
-
+        // Load labels map (hash → label)
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
-        $eps = (float)$this->ReadAttributeFloat('Epsilon');
-        $stateCount  = count($q);
-        $actionCount = count($actions);
-
-        $html = <<<HTML
-    <!DOCTYPE html><meta charset="utf-8">
-    <style>
-    :root { --bd:#ccc; --bg:#f8f8f8; --hdr:#f2f2f2; --txt:#222; --fs:14px; }
-    body{font-family:sans-serif;font-size:var(--fs);color:var(--txt);margin:0;padding:12px;}
-    .hdr{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:0 0 10px 0}
-    .chip{background:#eef;border:1px solid #dde;border-radius:999px;padding:4px 10px;font-size:15px}
-    details.guide{margin:8px 0 12px 0;border:1px solid var(--bd);background:#fafafa;border-radius:8px}
-    details.guide > summary{cursor:pointer;font-weight:700;padding:10px 12px;font-size:15px}
-    .guide .content{padding:0 14px 12px 14px;line-height:1.5}
-    .legend{display:flex;align-items:center;gap:10px;margin:6px 0 2px 14px;flex-wrap:wrap}
-    .swatch{width:20px;height:16px;border:1px solid var(--bd)}
-    table{border-collapse:collapse;width:100%}
-    th,td{border:1px solid var(--bd);padding:6px 8px;text-align:center;white-space:nowrap;font-size:14px}
-    thead th{background:var(--hdr);position:sticky;top:0;z-index:2}
-    td.state{position:sticky;left:0;background:var(--bg);text-align:left;font-weight:700;z-index:1}
-    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px}
-    .muted{opacity:.8}
-    ul.tight{margin:.3em 0 .8em 1.2em; padding:0}
-    ul.tight li{margin:.15em 0}
-    </style>
-
-    <div class="hdr">
-    <div class="chip">States: {$stateCount}</div>
-    <div class="chip">Actions: {$actionCount}</div>
-    <div class="chip">ε: {number_format($eps,3)}</div>
-    <div class="chip">Qmin: {number_format($minQ,2)} • Qmax: {number_format($maxQ,2)}</div>
-    </div>
-
-    <details class="guide" open>
-    <summary>How to read this table</summary>
-    <div class="content">
-        <p>
-        Each <b>row</b> is a <i>state</i> of the system; the left column shows a readable
-        label when available (e.g. <span class="mono">N=3 | Δ=2.4 | Coil=17.4°C</span>),
-        otherwise a hash key. Each <b>column</b> is an <i>action</i> (Power:Fan), e.g.
-        <span class="mono">40:80</span>.
-        </p>
-        <p><b>State label explained</b></p>
-        <ul class="tight">
-        <li><span class="mono">N</span> — number of rooms currently demanding cooling (after hysteresis/ZDM).</li>
-        <li><span class="mono">Δ</span> — maximum positive temperature overshoot above target among active rooms (°C).</li>
-        <li><span class="mono">Coil</span> — evaporator coil temperature (°C) from <span class="mono">CoilTempLink</span>.</li>
-        </ul>
-        <p><b>Cells</b></p>
-        <ul class="tight">
-        <li><b>Value</b> = Q-value (expected discounted reward) for taking that action in that state.</li>
-        <li><b>Colors</b>: greenish = better (higher Q), reddish = worse (lower Q), grey = neutral/unknown.</li>
-        <li><span class="mono">0:0</span> is hard-off; demand logic may avoid it during selection.</li>
-        <li><b>Epsilon (ε)</b> shows current exploration rate; higher ε ⇒ more random exploration.</li>
-        </ul>
-        <div class="legend">
-        <span class="muted">Legend:</span>
-        <span class="swatch" style="background:#d6ffd6"></span> higher Q
-        <span class="swatch" style="background:#f0f0f0"></span> neutral
-        <span class="swatch" style="background:#ffd6d6"></span> lower Q
-        </div>
-    </div>
-    </details>
-
-    <table>
-    <thead>
-        <tr>
-        <th class="state">State</th>
-    HTML;
-
-        foreach ($actions as $a) {
-            $html .= '<th class="mono">'.htmlspecialchars($a).'</th>';
-        }
-        $html .= "</tr></thead><tbody>";
-
-        foreach ($q as $sKey => $stateActions) {
-            $rowLabel = $labels[$sKey] ?? $sKey;
-
-            // If old labels still contain " | W=…", strip that segment for display.
-            if (is_string($rowLabel)) {
-                $rowLabel = preg_replace('/\s*\|\s*W\s*=\s*[^|]+/u', '', $rowLabel);
-                $rowLabel = preg_replace('/\s{2,}/', ' ', trim($rowLabel));
+        // Compute heatmap range
+        $minQ = 0.0; $maxQ = 0.0;
+        foreach ($q as $sa) {
+            if (!is_array($sa)) continue;
+            foreach ($sa as $v) {
+                $minQ = min($minQ, (float)$v);
+                $maxQ = max($maxQ, (float)$v);
             }
+        }
 
-            $html .= '<tr><td class="state mono">'.htmlspecialchars((string)$rowLabel).'</td>';
+        // Styles (bigger text as requested)
+        $html = '<style>
+        .qtbl{border-collapse:collapse;width:100%;table-layout:fixed}
+        .qtbl th,.qtbl td{border:1px solid #ccc;padding:6px 8px;text-align:center;font:500 13px/1.3 system-ui,Segoe UI,Roboto,sans-serif}
+        .qtbl th{background:#f2f2f2;position:sticky;top:0;z-index:1}
+        .qtbl td.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:1}
+        .legend{font:600 14px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:10px 6px 6px}
+        .help{font:500 13px/1.5 system-ui,Segoe UI,Roboto,sans-serif;margin:0 6px 12px;color:#333}
+        .kbd{font:600 12px/1 monospace;padding:1px 4px;border:1px solid #ddd;border-radius:4px;background:#f9f9f9}
+        </style>';
+
+        // Explanation (bigger text + your state legend)
+        $html .= '<div class="legend">How to read this table</div>
+        <div class="help">
+        Each row is a <b>state</b>, each column is an <b>action</b> (<span class="kbd">Power:Fan</span> in %).<br>
+        Cells show the learned Q-value (higher is better). Colors highlight negatives for quick scanning.
+        <br><br>
+        <b>State label format:</b> <span class="kbd">N=… | Δ=… | Coil=…</span><br>
+        • <b>N</b>: number of active rooms with cooling demand.<br>
+        • <b>Δ</b>: maximum temperature overshoot above the setpoint (°C, discretized/rounded).<br>
+        • <b>Coil</b>: current coil temperature (°C, discretized/rounded).<br>
+        <br>
+        The first row may show a technical key if a label was not recorded yet. Once that state occurs again, the label appears.
+        </div>';
+
+        // Header
+        $html .= '<table class="qtbl"><thead><tr><th class="state">State</th>';
+        foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
+        $html .= '</tr></thead><tbody>';
+
+        // Rows
+        foreach ($q as $sKey => $sa) {
+            $rowLabel = $labels[$sKey] ?? $sKey; // fall back to hash if unseen
+            $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
 
             foreach ($actions as $a) {
-                $val = isset($stateActions[$a]) ? (float)$stateActions[$a] : 0.0;
+                $val = isset($sa[$a]) ? (float)$sa[$a] : 0.0;
 
+                // heatmap color (light red for negatives, light green for positives)
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
                         $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;
-                        $r = 255 - (int)(100 * max(0,min(1,$p)));
-                        $g = 255;
-                        $b = 255 - (int)(100 * max(0,min(1,$p)));
-                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);
+                        $shade = (int)round(230 - 110 * $p); // 230→120
+                        $color = sprintf('#%02x%02x%02x', $shade, 255, $shade);
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;
-                        $r = 255;
-                        $g = 255 - (int)(150 * max(0,min(1,$p)));
-                        $b = 255 - (int)(150 * max(0,min(1,$p)));
-                        $color = sprintf('#%02x%02x%02x', $r, $g, $b);
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0; // val/minQ in [0..1]
+                        $shade = (int)round(230 - 140 * $p); // 230→90
+                        $color = sprintf('#%02x%02x%02x', 255, $shade, $shade);
                     }
                 }
 
@@ -1011,8 +997,8 @@ class adaptive_HVAC_control extends IPSModule
             }
             $html .= '</tr>';
         }
-
         $html .= '</tbody></table>';
+
         return $html;
     }
 
