@@ -963,7 +963,6 @@ class adaptive_HVAC_control extends IPSModule
         if (preg_match('/^(\d+):(\d+)$/', $pair, $m)) return ['p'=>(int)$m[1], 'f'=>(int)$m[2]];
         return ['p'=>0, 'f'=>0];
     }
-
     private function GenerateQTableHTML(): string
     {
         $q = $this->loadQTable();
@@ -974,11 +973,11 @@ class adaptive_HVAC_control extends IPSModule
         ksort($q);
         $actions = array_keys($this->getAllowedActionPairs());
 
-        // labels map (Q-state key → human label). Falls back to the key if unknown.
+        // Labels map (Q-state key → human label). Falls back to key if unknown.
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
-        // --- compute heatmap range ---
+        // Heatmap bounds
         $minQ = 0.0; $maxQ = 0.0;
         foreach ($q as $sa) {
             if (!is_array($sa)) continue;
@@ -989,18 +988,17 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        // --- compute dynamic width for the State column (in ch) ---
+        // --- State column width: based on longest label, a bit wider than before ---
         $maxChars = 0;
         foreach ($q as $sKey => $_) {
             $lab = $labels[$sKey] ?? $sKey;
             $len = function_exists('mb_strlen') ? mb_strlen($lab) : strlen($lab);
             if ($len > $maxChars) $maxChars = $len;
         }
-        // scale from characters to a sensible width; bound to avoid extremes
-        // tweak the 0.72 factor if you want it tighter/looser with your font
-        $stateCh = (int)max(18, min(ceil($maxChars * 0.72), 44)); // 18ch..44ch
+        // Wider baseline + small safety margin; bounded so it doesn’t explode.
+        $stateCh = (int)max(26, min(ceil($maxChars * 0.82) + 3, 50)); // 26ch..50ch
 
-        // ---------- styles ----------
+        // ---------------- Styles (unchanged except for dynamic state width) ----------------
         $html = '<style>
         :root{
             --fs: clamp(12px, 1.05vw, 14px);
@@ -1026,22 +1024,47 @@ class adaptive_HVAC_control extends IPSModule
             background:var(--sticky-bg);
             text-align:left; font-weight:600; font-size:var(--fs-state);
         }
-        .legend, .acc{margin:10px 6px 8px; font:600 14px/1.4 system-ui, Segoe UI, Roboto, sans-serif}
-        .acc summary{cursor:pointer; list-style: disclosure-closed; padding:6px 4px; border-radius:6px; background:#f7f7f7; border:1px solid #e6e6e6}
+        .legend{margin:10px 6px 6px; font:600 14px/1.4 system-ui, Segoe UI, Roboto, sans-serif}
+        .help{font:500 13px/1.55 system-ui, Segoe UI, Roboto, sans-serif; color:#333; margin:0 6px 12px}
+        .acc{margin:10px 6px 8px;}
+        .acc summary{cursor:pointer; list-style: disclosure-closed; padding:6px 4px; border-radius:6px; background:#f7f7f7; border:1px solid #e6e6e6; font:600 13px/1.4 system-ui, Segoe UI, Roboto, sans-serif}
         .acc[open] summary{list-style: disclosure-open; background:#f3f3f3}
         .acc .body{font:500 13px/1.55 system-ui, Segoe UI, Roboto, sans-serif; color:#333; padding:8px 10px 10px}
         .kbd{font:600 12px/1 monospace; padding:1px 4px; border:1px solid #ddd; border-radius:4px; background:#f9f9f9}
         </style>';
 
-        // ---------- table ----------
+        // ---------------- Explanatory headers (as agreed) ----------------
+        $html .= '<div class="legend">How to read this table</div>
+        <div class="help">
+        Each row is a <b>state</b>, each column is an <b>action</b> (<span class="kbd">Power:Fan</span> in %).<br>
+        Cells show the learned Q-value (higher is better). Green = better, red = worse. Values are shown with 2 decimals (full precision in tooltip).
+        <br><br>
+        <b>State label format:</b> <span class="kbd">N=… | Δ=… | Coil=…</span><br>
+        • <b>N</b>: active rooms with cooling demand (bucketed 0,1,2,3,4+).<br>
+        • <b>Δ</b>: maximum overshoot above setpoint (°C), bucketed.<br>
+        • <b>Coil</b>: coil temperature (°C), bucketed relative to the learning minimum.
+        </div>';
+
+        // Collapsible details (buckets & trend)
+        $html .= '<details class="acc"><summary>Bucket ranges (click to expand)</summary>
+        <div class="body">
+            <b>Δ (overshoot) buckets, °C:</b> ≤0.3, ≤0.6, ≤1.0, ≤1.5, ≤2.5, ≤3.5, ≤5.0, &gt;5.0.<br>
+            <b>Coil (vs MinCoilTempLearning):</b> margin m = Coil – Min.<br>
+            m ≤ −2.0 → C−3, ≤ −1.0 → C−2, ≤ −0.3 → C−1, |m| &lt; 0.3 → C0, &lt;1.0 → C1, &lt;2.0 → C2, otherwise C3.<br>
+            <b>Trend T (coil change since previous step):</b> &lt; −0.2 K → T−1, |Δ| ≤ 0.2 → T0, &gt; 0.2 K → T1.
+        </div>
+        </details>';
+
+        // ---------------- Table ----------------
         $html .= '<div class="qt-wrap"><table class="qtbl">';
-        // use colgroup to pin widths, state column width = computed ch
+
+        // colgroup with dynamic state width
         $html .= '<colgroup>
                     <col style="width: '.$stateCh.'ch">
                     '.str_repeat('<col style="width: var(--num-col)">', count($actions)).'
                 </colgroup>';
 
-        // header
+        // header row
         $html .= '<thead><tr><th class="state">State</th>';
         foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
         $html .= '</tr></thead><tbody>';
@@ -1062,11 +1085,11 @@ class adaptive_HVAC_control extends IPSModule
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
                         $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;
-                        $shade = (int)round(230 - 110 * $p);     // 230→120
+                        $shade = (int)round(230 - 110 * $p);      // 230→120
                         $color = sprintf('#%02x%02x%02x', $shade, 255, $shade);
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;
-                        $shade = (int)round(230 - 140 * $p);     // 230→90
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;  // 0..1
+                        $shade = (int)round(230 - 140 * $p);      // 230→90
                         $color = sprintf('#%02x%02x%02x', 255, $shade, $shade);
                     }
                 }
@@ -1082,6 +1105,7 @@ class adaptive_HVAC_control extends IPSModule
 
         return $html;
     }
+
 
 
 
