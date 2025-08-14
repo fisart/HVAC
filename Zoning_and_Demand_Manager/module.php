@@ -431,21 +431,30 @@ class Zoning_and_Demand_Manager extends IPSModule
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
         $hmap = $this->getHystState(); // latched hysteresis states { roomName => bool }
 
-        // --- Kalibrierungsmodus erkennen ---
-        $override = GetValue($this->GetIDForIdent('OverrideActive'));
-        $rawFlapMap = json_decode($this->ReadAttributeString('LastOrchestratorFlaps') ?: '[]', true);
-        $flapMap = [];
-        if (is_array($rawFlapMap)) {
-            foreach ($rawFlapMap as $k => $v) {
-                $flapMap[mb_strtolower(trim((string)$k))] = $this->toBool($v);
-            }
-        }
-        $calibMode = ($override && !empty($flapMap));
+        // --- Kalibrierungsmodus erkennen (lazy + memory safe) ---
+        $override  = GetValue($this->GetIDForIdent('OverrideActive'));
+        $flapMap   = [];
+        $calibMode = false;
 
+        if ($override) { // decode ONLY when override is active
+            $raw = $this->ReadAttributeString('LastOrchestratorFlaps') ?: '';
+            if ($raw !== '' && $raw !== '[]') {
+                $tmp = json_decode($raw, true);
+                if (is_array($tmp)) {
+                    foreach ($tmp as $k => $v) {
+                        $flapMap[mb_strtolower(trim((string)$k))] = $this->toBool($v);
+                    }
+                }
+                unset($tmp); // free memory early
+            }
+            $calibMode = !empty($flapMap);
+        }
+
+        // Keep DEBUG log tiny (no huge arrays)
         $this->log(3, 'agg_start', [
             'override'  => $override,
             'calibMode' => $calibMode,
-            'flapMap'   => $flapMap
+            'flapCount' => count($flapMap)
         ]);
 
         foreach ($rooms as $r) {
@@ -460,15 +469,16 @@ class Zoning_and_Demand_Manager extends IPSModule
             $effectiveDemand = false;
 
             if ($calibMode) {
-                // --- Im Kalibrierungsmodus nur den Plan verwenden ---
+                // Im Kalibrierungsmodus nur den Plan verwenden
                 if (array_key_exists($nameKey, $flapMap)) {
                     $effectiveDemand = $flapMap[$nameKey];
-                    $this->log(3, 'agg_calib_demand', ['room' => $name, 'demand' => $effectiveDemand]);
+                    // (avoid per-room debug spam with huge plans)
+                    // $this->log(3, 'agg_calib_demand', ['room' => $name, 'demand' => $effectiveDemand]);
                 } else {
                     $this->log(1, 'agg_calib_room_not_in_plan', ['room' => $name]);
                 }
             } else {
-                // --- Normale Logik ---
+                // Normale Logik
                 $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
                 if ($demVarID > 0 && IPS_VariableExists($demVarID)) {
                     $dem = (int)@GetValue($demVarID);
@@ -512,6 +522,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         return json_encode($agg);
     }
+
 
     public function HandleCoilBelowThreshold(float $coilTemp, float $threshold): void
     {
