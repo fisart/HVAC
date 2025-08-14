@@ -43,6 +43,10 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterPropertyFloat('EmergencyShutdownTemp', 1.0);
         $this->RegisterPropertyFloat('EmergencyRestartTemp', 5.0);
         $this->RegisterAttributeInteger('CoilTempEventID', 0);
+        $this->RegisterPropertyInteger('EmergencyFanPercent', 60); // 0..100
+        $this->RegisterPropertyBoolean('EmergencyCloseFlaps', false);
+
+
         // ---- Attribute ----
         $this->RegisterAttributeBoolean('EmergencyShutdownActive', false); // NEU: Merker für Not-Aus-Zustand
         // Standalone-Konstanten (optional)
@@ -129,7 +133,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $isShutdown   = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
 
                 // neue Parameter: Lüfter-Notbetrieb & optional Klappen schließen
-                $fanPct     = $this->clamp((int)$this->ReadPropertyInteger('EmergencyFanPercent'), 0, 100);
+                $fanPct = $this->readEmergencyFanPercent();
                 $closeFlaps = (bool)$this->ReadPropertyBoolean('EmergencyCloseFlaps');
 
                 if ($isShutdown) {
@@ -495,10 +499,11 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
         $this->log(0, 'EMERGENCY_BY_EVENT', ['coilTemp'=>$coilTemp, 'threshold'=>$threshold]);
 
-        $fanPct = $this->clamp((int)$this->ReadPropertyInteger('EmergencyFanPercent'), 0, 100);
+        $fanPct = $this->readEmergencyFanPercent();
 
         if ($this->guardEnter()) {
             try {
+                $this->log(2, 'emergency_fan_setting', ['fanPct'=>$fanPct]);
                 $this->systemSetPercent(0, $fanPct); // AC off, fan at % 
                 if ($this->ReadPropertyBoolean('EmergencyCloseFlaps')) {
                     $this->applyAllFlaps(false);
@@ -507,6 +512,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $this->guardLeave();
             }
         } else {
+            $this->log(2, 'emergency_fan_setting', ['fanPct'=>$fanPct]);
             $this->systemSetPercent(0, $fanPct);
             if ($this->ReadPropertyBoolean('EmergencyCloseFlaps')) {
                 $this->applyAllFlaps(false);
@@ -598,6 +604,13 @@ class Zoning_and_Demand_Manager extends IPSModule
         // IPS_SetHidden($eid, true);
     }
 
+    private function readEmergencyFanPercent(): int
+    {
+        // Falls Property fehlt oder 0 zurückkommt → sinnvoller Default 60
+        $v = (int)@$this->ReadPropertyInteger('EmergencyFanPercent');
+        if ($v <= 0 || $v > 100) $v = 60;
+        return $this->clamp($v, 0, 100);
+    }
 
     /**
      * Setzt eine Klappe je nach Typ (boolean/linear).
