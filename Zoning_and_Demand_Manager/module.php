@@ -108,7 +108,6 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
     }
 
-   
     public function ProcessZoning(): void
     {
         if (IPS_GetKernelRunlevel() !== KR_READY) {
@@ -117,10 +116,10 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
 
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
-        $shouldTickACIPS = false; // compute intent inside critical section
+        $shouldTickACIPS = false;
         try {
             // =================================================================
-            // === NEU: NOT-AUS-LOGIK (HAT HÖCHSTE PRIORITÄT) ===
+            // === NOT-AUS-LOGIK (höchste Priorität) | AC AUS, LÜFTER WEITER ===
             // =================================================================
             $coilSensorID = (int)$this->ReadPropertyInteger('CoilTemperatureLink');
             if ($coilSensorID > 0) {
@@ -129,29 +128,31 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $coilTemp     = $this->GetFloat($coilSensorID);
                 $isShutdown   = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
 
+                // neue Parameter: Lüfter-Notbetrieb & optional Klappen schließen
+                $fanPct     = $this->clamp((int)$this->ReadPropertyInteger('EmergencyFanPercent'), 0, 100);
+                $closeFlaps = (bool)$this->ReadPropertyBoolean('EmergencyCloseFlaps');
+
                 if ($isShutdown) {
                     // Wir SIND im Not-Aus-Zustand. Prüfe, ob wir wieder starten dürfen.
                     if (is_finite($coilTemp) && $coilTemp >= $restartTemp) {
-                        // Ja, die Temperatur ist wieder hoch genug.
                         $this->WriteAttributeBoolean('EmergencyShutdownActive', false);
                         $this->log(2, 'emergency_shutdown_ended', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
-                        // Weiter normal ausführen.
+                        // weiter mit normaler Logik
                     } else {
-                        // Nein, es ist immer noch zu kalt. Anlage bleibt aus.
+                        // immer noch zu kalt → AC aus, Lüfter im Notbetrieb
                         $this->log(1, 'emergency_shutdown_maintained', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
-                        $this->systemOff();
-                        $this->applyAllFlaps(false);
-                        return; // Beende die Funktion hier.
+                        $this->systemSetPercent(0, $fanPct);
+                        if ($closeFlaps) { $this->applyAllFlaps(false); }
+                        return;
                     }
                 } else {
-                    // Wir sind im NORMAL-Betrieb. Prüfe, ob wir abschalten müssen.
+                    // NORMAL-Betrieb. Prüfe, ob Not-Aus aktivieren.
                     if (is_finite($coilTemp) && $coilTemp <= $shutdownTemp) {
-                        // Ja, die Temperatur ist zu niedrig. NOT-AUS!
                         $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
                         $this->log(0, 'EMERGENCY_SHUTDOWN_ACTIVATED', ['coilTemp' => $coilTemp, 'shutdownTemp' => $shutdownTemp]);
-                        $this->systemOff();
-                        $this->applyAllFlaps(false);
-                        return; // Beende die Funktion hier.
+                        $this->systemSetPercent(0, $fanPct);
+                        if ($closeFlaps) { $this->applyAllFlaps(false); }
+                        return;
                     }
                 }
             }
@@ -168,7 +169,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
             if ($this->isBlockedByHeatingOrVentilation()) {
                 $this->log(2, 'blocked_by_heating_or_ventilation');
-                $this->systemOff();
+                $this->systemSetPercent(0, 0); // hier auch Lüfter aus, da kein Notfall
                 $this->applyAllFlaps(false);
                 return;
             }
@@ -179,7 +180,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                 return;
             }
 
-            // ---- Stateful Hysteresis (per room) ----
+            // ---- Zustandshysterese (pro Raum) ----
             $anyDemand = false;
             $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
             $hmap = $this->getHystState(); // { roomName => bool }
@@ -259,12 +260,12 @@ class Zoning_and_Demand_Manager extends IPSModule
                 if ($this->ReadPropertyBoolean('StandaloneMode')) {
                     $this->systemOnStandalone();
                 } else {
+                    // Kooperativer Modus: minimal anfordern, ACIPS passt an
                     $this->systemSetPercent(1, 1);
-                    // Only tick ACIPS in cooperative mode and if no emergency shutdown
                     $shouldTickACIPS = !(bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
                 }
             } else {
-                $this->systemOff();
+                $this->systemSetPercent(0, 0);
             }
 
             $this->GetAggregates();
@@ -273,11 +274,10 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->guardLeave();
         }
 
-        // ---- Trigger ACIPS OUTSIDE the semaphore (avoids deadlock) ----
+        // ---- ACIPS außerhalb der Semaphore triggern (Deadlock vermeiden) ----
         if ($shouldTickACIPS) {
             $acipsID = (int)$this->ReadPropertyInteger('AdaptiveInstanceID');
             if ($acipsID > 0 && IPS_InstanceExists($acipsID)) {
-                // Fire-and-forget wrapper call
                 @IPS_RunScriptText('ACIPS_ProcessLearning(' . $acipsID . ');');
                 $this->log(3, 'triggered_acips_tick', ['acipsID' => $acipsID]);
             } else {
@@ -285,6 +285,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             }
         }
     }
+   
 
 
     // ---------- Public (Orchestrator APIs) ----------
@@ -491,24 +492,28 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function HandleCoilBelowThreshold(float $coilTemp, float $threshold): void
     {
-        // Latch emergency and hard-stop the system right now
         $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
         $this->log(0, 'EMERGENCY_BY_EVENT', ['coilTemp'=>$coilTemp, 'threshold'=>$threshold]);
 
-        // Do the shutdown safely inside the module semaphore
+        $fanPct = $this->clamp((int)$this->ReadPropertyInteger('EmergencyFanPercent'), 0, 100);
+
         if ($this->guardEnter()) {
             try {
-                $this->systemOff();
-                $this->applyAllFlaps(false);
+                $this->systemSetPercent(0, $fanPct); // AC off, fan at % 
+                if ($this->ReadPropertyBoolean('EmergencyCloseFlaps')) {
+                    $this->applyAllFlaps(false);
+                }
             } finally {
                 $this->guardLeave();
             }
         } else {
-            // Fallback: still enforce shutdown even if semaphore is busy
-            $this->systemOff();
-            $this->applyAllFlaps(false);
+            $this->systemSetPercent(0, $fanPct);
+            if ($this->ReadPropertyBoolean('EmergencyCloseFlaps')) {
+                $this->applyAllFlaps(false);
+            }
         }
     }
+
 
 
 
