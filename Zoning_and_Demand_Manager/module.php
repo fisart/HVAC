@@ -273,7 +273,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // ---- Trigger ACIPS OUTSIDE the semaphore (avoids deadlock) ----
         if ($shouldTickACIPS) {
-            $acipsID = (int)$this->ReadPropertyInteger('AdaptiveInstanceID'));
+            $acipsID = (int)$this->ReadPropertyInteger('AdaptiveInstanceID');
             if ($acipsID > 0 && IPS_InstanceExists($acipsID)) {
                 // Fire-and-forget wrapper call
                 @IPS_RunScriptText('ACIPS_ProcessLearning(' . $acipsID . ');');
