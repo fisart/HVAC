@@ -1031,12 +1031,15 @@ class adaptive_HVAC_control extends IPSModule
         $deltaEdges = [0.3, 0.6, 1.0, 1.5, 2.5, 3.5, 5.0]; // must match binD()
         $minL = (float)$this->ReadPropertyFloat('MinCoilTempLearning');  // used by binC()
 
-        // Basic styles (kept as before; only tiny additions for the weights block)
+        // >>> Adjustable width for the "State" column (in px)
+        $stateColWidth = 220;
+
+        // Basic styles (kept as before; only width added for the state column)
         $html = '<style>
         .qtbl{border-collapse:collapse;width:100%;table-layout:fixed}
         .qtbl th,.qtbl td{border:1px solid #ccc;padding:6px 8px;text-align:center;font:500 13px/1.3 system-ui,Segoe UI,Roboto,sans-serif}
         .qtbl th{background:#f2f2f2;position:sticky;top:0;z-index:1}
-        .qtbl td.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:1;white-space:nowrap}
+        .qtbl td.state,.qtbl th.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:1;white-space:nowrap;width:'.$stateColWidth.'px;min-width:'.$stateColWidth.'px;max-width:'.$stateColWidth.'px}
         .legend{font:700 15px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:10px 6px 6px}
         .help{font:500 13px/1.5 system-ui,Segoe UI,Roboto,sans-serif;margin:0 6px 10px;color:#333}
         details{margin:6px 6px 10px}
@@ -1063,7 +1066,6 @@ class adaptive_HVAC_control extends IPSModule
             <summary>Current reward weights</summary>
             <div class="weights-grid">';
         foreach ($w as $label => $val) {
-            // show up to 4 decimals for small weights
             $fmt = (abs($val) < 0.1) ? number_format($val, 4) : number_format($val, 2);
             $html .= '<div class="chip"><b>'.htmlspecialchars($label).'</b>'.$fmt.'</div>';
         }
