@@ -2,6 +2,7 @@
   "elements": [
     { "type": "SelectInstance", "name": "AdaptiveInstanceID", "caption": "Adaptive (ACIPS) instance" },
     { "type": "CheckBox", "name": "StandaloneMode", "caption": "Standalone Mode" },
+    { "type": "SelectVariable", "name": "StandaloneModeLink", "caption": "Standalone Mode Link (Bool)" },
     { "type": "NumberSpinner", "name": "TimerInterval", "caption": "Processing Interval (seconds)", "digits": 0, "minimum": 5, "maximum": 600, "value": 60 },
     { "type": "NumberSpinner", "name": "Hysteresis", "caption": "Hysteresis (°C)", "digits": 1, "minimum": 0.1, "maximum": 5, "value": 0.5 },
 

@@ -26,6 +26,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // Basis-Properties (sollten zu deiner form.json passen)
         $this->RegisterPropertyBoolean('StandaloneMode', false);
+        $this->RegisterPropertyInteger('StandaloneModeLink', 0);
         $this->RegisterPropertyInteger('TimerInterval', 60); // Sekunden
         $this->RegisterPropertyFloat('Hysteresis', 0.5);
         $this->RegisterPropertyInteger('StandalonePowerVar', 0); // optional: Integer 0..100
@@ -78,6 +79,10 @@ class Zoning_and_Demand_Manager extends IPSModule
     public function ApplyChanges()
     {
         parent::ApplyChanges();
+        $link = (int)$this->ReadPropertyInteger('StandaloneModeLink');
+        if ($link > 0 && IPS_VariableExists($link)) {
+            $this->RegisterMessage($link, VM_UPDATE);
+        }
 
         if (IPS_GetKernelRunlevel() !== KR_READY) {
             // Re-run ApplyChanges when kernel becomes ready
@@ -106,11 +111,25 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function MessageSink($TimeStamp, $SenderID, $Message, $Data)
     {
-        if ($Message === IPS_KERNELMESSAGE && $Data[0] === KR_READY) {
-            // Kernel is ready → arm timer now
+        // Kernel finished booting → re-run ApplyChanges to arm timers/subscriptions
+        if ($Message === IPS_KERNELMESSAGE && isset($Data[0]) && $Data[0] === KR_READY) {
             $this->ApplyChanges();
+            return;
+        }
+
+        // React immediately when the external Standalone link changes (if configured)
+        if ($Message === VM_UPDATE) {
+            $link = (int)$this->ReadPropertyInteger('StandaloneModeLink'); // requires property from Create()
+            if ($link > 0 && $SenderID === $link) {
+                $this->log(2, 'standalone_link_update', ['val' => @GetValue($SenderID)]);
+                // Re-evaluate control right away; main logic has its own semaphore
+                $this->ProcessZoning();
+                try { $this->ReloadForm(); } catch (\Throwable $e) {}
+                return;
+            }
         }
     }
+
 
     public function ProcessZoning(): void
     {
@@ -261,7 +280,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
             $this->log(2, 'DECIDE_SYSTEM', ['anyDemand' => $anyDemand]);
             if ($anyDemand) {
-                if ($this->ReadPropertyBoolean('StandaloneMode')) {
+                if ($this->isStandalone()) {
                     $this->systemOnStandalone();
                 } else {
                     // Kooperativer Modus: minimal anfordern, ACIPS passt an
@@ -300,7 +319,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     public function SetOverrideMode(bool $on): void
     {
            // NEUER WÄCHTER:
-        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+        if ($this->isStandalone()) {
             $this->log(2, 'ignore_set_override', ['reason' => 'Standalone Mode is active']);
             return; // Befehl ignorieren und Funktion sofort verlassen
         }
@@ -346,7 +365,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     {
 
           // NEUER WÄCHTER:
-        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+        if ($this->isStandalone()) {
             $this->log(2, 'ignore_command_flaps', ['reason' => 'Standalone Mode is active', 'stage' => $stageName]);
             return; // Befehl ignorieren und Funktion sofort verlassen
         }
@@ -380,7 +399,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     public function CommandSystem(int $powerPercent, int $fanPercent): void
     {
             // NEUER WÄCHTER:
-        if ($this->ReadPropertyBoolean('StandaloneMode')) {
+        if ($this->isStandalone()) {
             $this->log(2, 'ignore_command_system', ['reason' => 'Standalone Mode is active', 'power' => $powerPercent, 'fan' => $fanPercent]);
             return; // Befehl ignorieren und Funktion sofort verlassen
         }
@@ -537,6 +556,18 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->setFlap($r, $open);
         }
     }
+
+
+    private function isStandalone(): bool
+    {
+        $link = (int)$this->ReadPropertyInteger('StandaloneModeLink');
+        if ($link > 0 && IPS_VariableExists($link)) {
+            return $this->varTruthy($link);
+        }
+        return (bool)$this->isStandalone();
+    }
+
+
     private function readStandalonePercent(string $propName, int $fallbackConst): int
     {
         $vid = (int)$this->ReadPropertyInteger($propName);
