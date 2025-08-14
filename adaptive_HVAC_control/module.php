@@ -53,6 +53,16 @@ class adaptive_HVAC_control extends IPSModule
 
         // Rooms
         $this->RegisterPropertyString('MonitoredRooms', '[]');
+        // Weights
+        $this->RegisterPropertyFloat('W_Comfort', 1.0);
+        $this->RegisterPropertyFloat('W_Energy', 0.01);
+        $this->RegisterPropertyFloat('W_ChangePenalty', 0.002);
+        $this->RegisterPropertyFloat('W_Progress', 10.0);
+        $this->RegisterPropertyFloat('W_Freeze', 2.0);
+        $this->RegisterPropertyFloat('W_Trend', 2.0);
+        $this->RegisterPropertyFloat('TrendEps', 0.10);
+        $this->RegisterPropertyFloat('W_Window', 0.0); // keep 0.0 to disable
+
 
         // Epsilon
         $this->RegisterPropertyFloat('EpsilonStart', 0.40);
@@ -260,13 +270,13 @@ class adaptive_HVAC_control extends IPSModule
 
             // ---- Stash meta for next transition (store BUCKET KEY!) ----
             $this->SetBuffer('MetaData', json_encode([
-                'stateKey' => $sKeyNew,                 // <-- bucket key
+                'stateKey' => $sKeyNew,              // << use bucketed key here
                 'action'   => $p . ':' . $f,
                 'wad'      => $metrics['rawWAD'] ?? 0.0,
                 'coil'     => $metrics['coilTemp'],
                 'maxDelta' => $state['maxDelta'],
                 'ts'       => time()
-            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
 
         } finally {
             IPS_SemaphoreLeave('ADHVAC_' . $this->InstanceID);
@@ -326,13 +336,13 @@ class adaptive_HVAC_control extends IPSModule
 
         // ---- Seed next transition (store BUCKET KEY!) ----
         $this->SetBuffer('MetaData', json_encode([
-            'stateKey' => $sKeyNew,                 // <-- bucket key
+            'stateKey' => $sKeyNew,              // << use bucketed key here
             'action'   => $p . ':' . $f,
             'wad'      => $metrics['rawWAD'] ?? 0.0,
             'coil'     => $metrics['coilTemp'],
             'maxDelta' => $state['maxDelta'],
             'ts'       => time()
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
 
         return json_encode(['ok' => true, 'applied' => ['p' => $p, 'f' => $f]]);
     }
@@ -468,47 +478,63 @@ class adaptive_HVAC_control extends IPSModule
     }
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
     {
-        // Base from v2.8.3
-        $comfort = -($state['maxDelta'] ?? 0.0);
-        $energy  = -0.01 * (($action['p'] ?? 0) + ($action['f'] ?? 0));
-        $window  = -0.5 * (int)($state['anyWindowOpen'] ?? 0);  // keep as-is; remove later if you drop window entirely
+        // Weights from form.json
+        $wComfort  = (float)$this->ReadPropertyFloat('W_Comfort');        // 1.0
+        $wEnergy   = (float)$this->ReadPropertyFloat('W_Energy');         // 0.01
+        $wChange   = (float)$this->ReadPropertyFloat('W_ChangePenalty');  // 0.002
+        $wProgress = (float)$this->ReadPropertyFloat('W_Progress');       // 10.0
+        $wFreeze   = (float)$this->ReadPropertyFloat('W_Freeze');         // 2.0
+        $wTrend    = (float)$this->ReadPropertyFloat('W_Trend');          // 2.0
+        $epsTrend  = (float)$this->ReadPropertyFloat('TrendEps');         // 0.10
+        $wWindow   = (float)$this->ReadPropertyFloat('W_Window');         // 0.0 by default
 
+        // Base terms
+        $comfort = -$wComfort * (float)($state['maxDelta'] ?? 0.0);              // want Δ↓
+        $energy  = -$wEnergy  * (float)(($action['p'] ?? 0) + ($action['f'] ?? 0)); // want power/fan↓
+
+        // Optional window penalty (kept generic, defaults to off)
+        $windowPenalty = 0.0;
+        if ($wWindow > 0 && !empty($state['anyWindowOpen'])) {
+            $windowPenalty = -$wWindow;
+        }
+
+        // Change penalty (discourage big jumps)
         $penalty = 0.0;
         if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
-            $dp = abs(((int)$m[1]) - ($action['p'] ?? 0));
-            $df = abs(((int)$m[2]) - ($action['f'] ?? 0));
-            $penalty = -0.002 * ($dp + $df);
+            $dp = abs(((int)$m[1]) - (int)($action['p'] ?? 0));
+            $df = abs(((int)$m[2]) - (int)($action['f'] ?? 0));
+            $penalty = -$wChange * ($dp + $df);
         }
 
-        // Shaping from v3.4
+        // Progress shaping: improvement of WAD (weighted average deviation) since last step
         $progress = 0.0;
         if ($metrics && $prevMeta && isset($prevMeta['wad'])) {
-            $progress = (($prevMeta['wad'] ?? 0.0) - ($metrics['rawWAD'] ?? 0.0)) * 10.0;
+            $progress = $wProgress * ( ((float)$prevMeta['wad']) - ((float)($metrics['rawWAD'] ?? 0.0)) );
         }
 
+        // Freeze risk shaping: penalize being below learning min coil temperature
         $freeze = 0.0;
         if ($metrics) {
             $minL = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
             $coil = $metrics['coilTemp'];
             if (is_numeric($coil) && $coil < $minL) {
-                $freeze = -2.0 * ($minL - $coil);
+                $freeze = -$wFreeze * ($minL - (float)$coil);
             }
         }
 
-        // --- NEW: comfort trend bonus/penalty (no new state) ---
-        // Uses change in maxDelta: if maxDelta decreased, we are improving.
+        // Comfort trend shaping: reward ΔT decreasing (positive delta), penalize increasing
         $trend = 0.0;
         if ($prevMeta && isset($prevMeta['maxDelta']) && isset($state['maxDelta'])) {
-            $delta = ((float)$prevMeta['maxDelta']) - ((float)$state['maxDelta']); // >0 = getting better
-            $epsTrend = 0.10;  // ignore tiny noise (<0.1°C)
-            $kTrend   = 2.0;   // weight
+            $delta = ((float)$prevMeta['maxDelta']) - ((float)$state['maxDelta']); // >0 = improving
             if (abs($delta) > $epsTrend) {
-                $trend = $kTrend * $delta; // positive if improving, negative if worsening
+                $trend = $wTrend * $delta;
             }
         }
 
-        return (float)round($comfort + $energy + $window + $penalty + $progress + $freeze + $trend, 4);
+        $r = $comfort + $energy + $windowPenalty + $penalty + $progress + $freeze + $trend;
+        return (float)round($r, 4);
     }
+
  
     /**
      * Build a human friendly label from a state vector.
@@ -547,18 +573,21 @@ class adaptive_HVAC_control extends IPSModule
     }
 
 
+  
     private function bestActionForState(array $state, array $allowedKeys): string
     {
-        $q = $this->loadQTable();
+        // Build the SAME bucketed key used for updates
+        $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
+            ? $prevMeta['coil']
+            : ($state['coilTemp'] ?? null);
 
-        // Use previous coil to compute the same bucket key we use for learning
-        $prev = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-        $prevCoil = (is_array($prev) && isset($prev['coil'])) ? $prev['coil'] : ($state['coilTemp'] ?? null);
-
-        // BUCKETED key (replaces: $sKey = $this->stateKey($state);)
         $sKey = $this->stateKeyBuckets($state, $prevCoil);
 
-        $bestVal = -INF; $cands = [];
+        $q = $this->loadQTable();
+
+        $bestVal = -INF;
+        $cands = [];
         foreach ($allowedKeys as $k) {
             $val = $q[$sKey][$k] ?? 0.0;
             if ($val > $bestVal) { $bestVal = $val; $cands = [$k]; }
@@ -575,6 +604,7 @@ class adaptive_HVAC_control extends IPSModule
         }
         return $cands[0] ?? ($allowedKeys[0] ?? '0:0');
     }
+   
 
 
     // -------------------- Coil / Safety --------------------
@@ -963,6 +993,7 @@ class adaptive_HVAC_control extends IPSModule
         if (preg_match('/^(\d+):(\d+)$/', $pair, $m)) return ['p'=>(int)$m[1], 'f'=>(int)$m[2]];
         return ['p'=>0, 'f'=>0];
     }
+
     private function GenerateQTableHTML(): string
     {
         $q = $this->loadQTable();
@@ -973,139 +1004,124 @@ class adaptive_HVAC_control extends IPSModule
         ksort($q);
         $actions = array_keys($this->getAllowedActionPairs());
 
-        // Labels map (Q-state key → human label). Falls back to key if unknown.
+        // Labels map (hash → label)
         $labels = json_decode($this->ReadAttributeString('StateLabels') ?: '{}', true);
         if (!is_array($labels)) $labels = [];
 
-        // Heatmap bounds
+        // Heatmap range
         $minQ = 0.0; $maxQ = 0.0;
         foreach ($q as $sa) {
             if (!is_array($sa)) continue;
-            foreach ($sa as $v) {
-                $v = (float)$v;
-                if ($v < $minQ) $minQ = $v;
-                if ($v > $maxQ) $maxQ = $v;
-            }
+            foreach ($sa as $v) { $v = (float)$v; $minQ = min($minQ, $v); $maxQ = max($maxQ, $v); }
         }
 
-        // --- State column width: based on longest label, a bit wider than before ---
-        $maxChars = 0;
-        foreach ($q as $sKey => $_) {
-            $lab = $labels[$sKey] ?? $sKey;
-            $len = function_exists('mb_strlen') ? mb_strlen($lab) : strlen($lab);
-            if ($len > $maxChars) $maxChars = $len;
-        }
-        // Wider baseline + small safety margin; bounded so it doesn’t explode.
-        $stateCh = (int)max(26, min(ceil($maxChars * 0.82) + 3, 50)); // 26ch..50ch
+        // Read weights for the header
+        $w = [
+            'Comfort (ΔT)'        => (float)$this->ReadPropertyFloat('W_Comfort'),
+            'Energy per %'        => (float)$this->ReadPropertyFloat('W_Energy'),
+            'Change per % step'   => (float)$this->ReadPropertyFloat('W_ChangePenalty'),
+            'Progress (WAD)'      => (float)$this->ReadPropertyFloat('W_Progress'),
+            'Freeze risk'         => (float)$this->ReadPropertyFloat('W_Freeze'),
+            'Trend (Δ maxΔT)'     => (float)$this->ReadPropertyFloat('W_Trend'),
+            'Trend deadband (°C)' => (float)$this->ReadPropertyFloat('TrendEps'),
+            'Window penalty'      => (float)$this->ReadPropertyFloat('W_Window'),
+        ];
 
-        // ---------------- Styles (unchanged except for dynamic state width) ----------------
+        // Bucket info (for the collapsible “Bucket definitions”)
+        $deltaEdges = [0.3, 0.6, 1.0, 1.5, 2.5, 3.5, 5.0]; // must match binD()
+        $minL = (float)$this->ReadPropertyFloat('MinCoilTempLearning');  // used by binC()
+
+        // Basic styles (kept as before; only tiny additions for the weights block)
         $html = '<style>
-        :root{
-            --fs: clamp(12px, 1.05vw, 14px);
-            --fs-state: clamp(12px, 1.15vw, 15px);
-            --cell-pad: 6px 8px;
-            --sticky-bg: #fafafa;
-            --head-bg: #f2f2f2;
-            --grid: #ccc;
-            --num-col: clamp(64px, 6.4vw, 92px);
-        }
-        .qt-wrap{max-width:100%; overflow:auto;}
-        .qtbl{border-collapse:collapse; width:100%; table-layout:fixed}
-        .qtbl th,.qtbl td{
-            border:1px solid var(--grid);
-            padding:var(--cell-pad);
-            text-align:center;
-            font:500 var(--fs)/1.3 system-ui, Segoe UI, Roboto, sans-serif;
-            white-space:nowrap; overflow:hidden; text-overflow:ellipsis
-        }
-        .qtbl th{background:var(--head-bg); position:sticky; top:0; z-index:2}
-        .qtbl td.state,.qtbl th.state{
-            position:sticky; left:0; z-index:3;
-            background:var(--sticky-bg);
-            text-align:left; font-weight:600; font-size:var(--fs-state);
-        }
-        .legend{margin:10px 6px 6px; font:600 14px/1.4 system-ui, Segoe UI, Roboto, sans-serif}
-        .help{font:500 13px/1.55 system-ui, Segoe UI, Roboto, sans-serif; color:#333; margin:0 6px 12px}
-        .acc{margin:10px 6px 8px;}
-        .acc summary{cursor:pointer; list-style: disclosure-closed; padding:6px 4px; border-radius:6px; background:#f7f7f7; border:1px solid #e6e6e6; font:600 13px/1.4 system-ui, Segoe UI, Roboto, sans-serif}
-        .acc[open] summary{list-style: disclosure-open; background:#f3f3f3}
-        .acc .body{font:500 13px/1.55 system-ui, Segoe UI, Roboto, sans-serif; color:#333; padding:8px 10px 10px}
-        .kbd{font:600 12px/1 monospace; padding:1px 4px; border:1px solid #ddd; border-radius:4px; background:#f9f9f9}
+        .qtbl{border-collapse:collapse;width:100%;table-layout:fixed}
+        .qtbl th,.qtbl td{border:1px solid #ccc;padding:6px 8px;text-align:center;font:500 13px/1.3 system-ui,Segoe UI,Roboto,sans-serif}
+        .qtbl th{background:#f2f2f2;position:sticky;top:0;z-index:1}
+        .qtbl td.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:1;white-space:nowrap}
+        .legend{font:700 15px/1.4 system-ui,Segoe UI,Roboto,sans-serif;margin:10px 6px 6px}
+        .help{font:500 13px/1.5 system-ui,Segoe UI,Roboto,sans-serif;margin:0 6px 10px;color:#333}
+        details{margin:6px 6px 10px}
+        details > summary{cursor:pointer;font:600 13px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+        .weights{font:500 13px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+        .weights-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 2px}
+        .chip{border:1px solid #ddd;border-radius:8px;padding:6px 8px;background:#fff}
+        .chip b{display:block;font-weight:700;margin-bottom:2px}
         </style>';
 
-        // ---------------- Explanatory headers (as agreed) ----------------
+        // Explanation (unchanged) + NEW: live reward weights
         $html .= '<div class="legend">How to read this table</div>
         <div class="help">
-        Each row is a <b>state</b>, each column is an <b>action</b> (<span class="kbd">Power:Fan</span> in %).<br>
-        Cells show the learned Q-value (higher is better). Green = better, red = worse. Values are shown with 2 decimals (full precision in tooltip).
-        <br><br>
-        <b>State label format:</b> <span class="kbd">N=… | Δ=… | Coil=…</span><br>
-        • <b>N</b>: active rooms with cooling demand (bucketed 0,1,2,3,4+).<br>
-        • <b>Δ</b>: maximum overshoot above setpoint (°C), bucketed.<br>
-        • <b>Coil</b>: coil temperature (°C), bucketed relative to the learning minimum.
+        Each row is a <b>state</b>, each column is an <b>action</b> (<code>Power:Fan</code> in %).<br>
+        Cells show the learned Q-value (higher is better). Colors highlight negatives for quick scanning.<br><br>
+        <b>State label format:</b> <code>N=… | Δ=… | Coil=…</code><br>
+        • <b>N</b>: number of active rooms with cooling demand.<br>
+        • <b>Δ</b>: maximum temperature overshoot above the setpoint (rounded).<br>
+        • <b>Coil</b>: current coil temperature (rounded).
         </div>';
 
-        // Collapsible details (buckets & trend)
-        $html .= '<details class="acc"><summary>Bucket ranges (click to expand)</summary>
-        <div class="body">
-            <b>Δ (overshoot) buckets, °C:</b> ≤0.3, ≤0.6, ≤1.0, ≤1.5, ≤2.5, ≤3.5, ≤5.0, &gt;5.0.<br>
-            <b>Coil (vs MinCoilTempLearning):</b> margin m = Coil – Min.<br>
-            m ≤ −2.0 → C−3, ≤ −1.0 → C−2, ≤ −0.3 → C−1, |m| &lt; 0.3 → C0, &lt;1.0 → C1, &lt;2.0 → C2, otherwise C3.<br>
-            <b>Trend T (coil change since previous step):</b> &lt; −0.2 K → T−1, |Δ| ≤ 0.2 → T0, &gt; 0.2 K → T1.
+        // NEW: a collapsible block with the current reward weights
+        $html .= '<details class="weights" open>
+            <summary>Current reward weights</summary>
+            <div class="weights-grid">';
+        foreach ($w as $label => $val) {
+            // show up to 4 decimals for small weights
+            $fmt = (abs($val) < 0.1) ? number_format($val, 4) : number_format($val, 2);
+            $html .= '<div class="chip"><b>'.htmlspecialchars($label).'</b>'.$fmt.'</div>';
+        }
+        $html .= '  </div>
+        </details>';
+
+        // Collapsible bucket definitions (unchanged idea)
+        $html .= '<details>
+        <summary>Bucket definitions</summary>
+        <div class="help">
+            <b>Δ (comfort) buckets:</b> ';
+        $ranges = [];
+        $prev = 0.0;
+        foreach ($deltaEdges as $i => $edge) {
+            $ranges[] = sprintf('%d: %.1f–%.1f°C', $i, $prev, $edge);
+            $prev = $edge;
+        }
+        $ranges[] = sprintf('%d: &gt;%.1f°C', count($deltaEdges), end($deltaEdges));
+        $html .= implode(' &nbsp;|&nbsp; ', $ranges);
+        $html .= '<br><b>Coil buckets (margin to MinLearning='.$minL.'°C):</b> 
+        -3: ≤ -2.0, -2: (-2.0..-1.0], -1: (-1.0..-0.3], 0: (-0.3..+0.3), 
+        1: (0.3..1.0), 2: (1.0..2.0), 3: &gt; 2.0<br>
+        <b>Trend:</b> -1 falling (&lt;-0.2°C), 0 flat (±0.2°C), 1 rising (&gt;+0.2°C)
         </div>
         </details>';
 
-        // ---------------- Table ----------------
-        $html .= '<div class="qt-wrap"><table class="qtbl">';
-
-        // colgroup with dynamic state width
-        $html .= '<colgroup>
-                    <col style="width: '.$stateCh.'ch">
-                    '.str_repeat('<col style="width: var(--num-col)">', count($actions)).'
-                </colgroup>';
-
-        // header row
-        $html .= '<thead><tr><th class="state">State</th>';
+        // Build table (2 decimals as agreed)
+        $html .= '<table class="qtbl"><thead><tr><th class="state">State</th>';
         foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
         $html .= '</tr></thead><tbody>';
 
-        // rows
         foreach ($q as $sKey => $sa) {
-            if (!is_array($sa)) $sa = [];
-            $rowLabel = $labels[$sKey] ?? $sKey;
-            $title = ' title="State key: '.$sKey.'"';
-
-            $html .= '<tr><td class="state"'.$title.'>'.htmlspecialchars($rowLabel).'</td>';
+            $rowLabel = $labels[$sKey] ?? $sKey; // show label if known; fallback to key/hash
+            $html .= '<tr><td class="state">'.htmlspecialchars($rowLabel).'</td>';
 
             foreach ($actions as $a) {
                 $val = isset($sa[$a]) ? (float)$sa[$a] : 0.0;
-
-                // heat color
+                // heatmap color (light green for ≥0, light red for <0)
                 $color = '#f0f0f0';
                 if ($maxQ != $minQ) {
                     if ($val >= 0) {
                         $p = ($maxQ > 0) ? ($val / $maxQ) : 0.0;
-                        $shade = (int)round(230 - 110 * $p);      // 230→120
+                        $shade = (int)round(230 - 110 * $p); // 230→120
                         $color = sprintf('#%02x%02x%02x', $shade, 255, $shade);
                     } else {
-                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0;  // 0..1
-                        $shade = (int)round(230 - 140 * $p);      // 230→90
+                        $p = ($minQ < 0) ? ($val / $minQ) : 0.0; // val/minQ in [0..1]
+                        $shade = (int)round(230 - 140 * $p); // 230→90
                         $color = sprintf('#%02x%02x%02x', 255, $shade, $shade);
                     }
                 }
-
-                $html .= '<td style="background:'.$color.'" title="'.htmlspecialchars(sprintf('%.5f', $val)).'">'
-                    . number_format($val, 2)
-                    . '</td>';
+                $html .= '<td style="background:'.$color.'">'.number_format($val, 2).'</td>';
             }
             $html .= '</tr>';
         }
 
-        $html .= '</tbody></table></div>';
-
+        $html .= '</tbody></table>';
         return $html;
     }
-
 
 
 
