@@ -40,6 +40,31 @@
     { "type": "NumberSpinner", "name": "EpsilonStart", "caption": "Epsilon start", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.40 },
     { "type": "NumberSpinner", "name": "EpsilonMin", "caption": "Epsilon min", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.05 },
     { "type": "NumberSpinner", "name": "EpsilonDecay", "caption": "Epsilon decay (per step)", "digits": 5, "minimum": 0.90000, "maximum": 0.99999, "value": 0.995 },
+    { "type": "Label", "label": "--- Reward Weights ---" },
+
+    { "type": "NumberSpinner", "name": "W_Comfort",
+      "caption": "Comfort weight (ΔT)", "digits": 2, "minimum": 0.0, "maximum": 10.0, "value": 1.0 },
+
+    { "type": "NumberSpinner", "name": "W_Energy",
+      "caption": "Energy weight per % (p+f)", "digits": 4, "minimum": 0.0, "maximum": 0.1, "value": 0.01 },
+
+    { "type": "NumberSpinner", "name": "W_ChangePenalty",
+      "caption": "Change penalty weight per % step", "digits": 4, "minimum": 0.0, "maximum": 0.1, "value": 0.002 },
+
+    { "type": "NumberSpinner", "name": "W_Progress",
+      "caption": "Progress weight (WAD improvement)", "digits": 2, "minimum": 0.0, "maximum": 50.0, "value": 10.0 },
+
+    { "type": "NumberSpinner", "name": "W_Freeze",
+      "caption": "Coil freeze penalty weight", "digits": 2, "minimum": 0.0, "maximum": 20.0, "value": 2.0 },
+
+    { "type": "NumberSpinner", "name": "W_Trend",
+      "caption": "Comfort trend weight (Δ maxΔT)", "digits": 2, "minimum": 0.0, "maximum": 20.0, "value": 2.0 },
+
+    { "type": "NumberSpinner", "name": "TrendEps",
+      "caption": "Trend deadband (°C)", "digits": 2, "minimum": 0.0, "maximum": 1.0, "value": 0.10 },
+
+    { "type": "NumberSpinner", "name": "W_Window",
+      "caption": "Window penalty weight (set 0 to disable)", "digits": 2, "minimum": 0.0, "maximum": 5.0, "value": 0.0 },
 
     { "type": "Label", "label": "--- Coil Safety ---" },
     { "type": "NumberSpinner", "name": "MinCoilTempLearning", "caption": "Min Coil Temp (Learning, °C)", "digits": 1, "minimum": -5.0, "maximum": 10.0, "value": 2.0 },
