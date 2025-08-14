@@ -61,7 +61,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterAttributeString('WindowStable', '{}');    // {roomName:{open:bool, ts:int}}
         $this->RegisterAttributeString('LastAggregates', '{}');  // Cache/Debug
         $this->RegisterAttributeString('LastOrchestratorFlaps', '[]');
-
+        $this->RegisterAttributeString('RoomHystState', '{}'); // per-room latched demand (bool)
 
         // ---- Status-Variablen ----
         $this->RegisterVariableBoolean('OverrideActive', 'Override active', '~Alert', 10);
@@ -115,7 +115,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
 
         if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
-        $shouldTickACIPS = false; // NEW: compute intent inside critical section
+        $shouldTickACIPS = false; // compute intent inside critical section
         try {
             // =================================================================
             // === NEU: NOT-AUS-LOGIK (HAT HÖCHSTE PRIORITÄT) ===
@@ -133,7 +133,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                         // Ja, die Temperatur ist wieder hoch genug.
                         $this->WriteAttributeBoolean('EmergencyShutdownActive', false);
                         $this->log(2, 'emergency_shutdown_ended', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
-                        // Die Funktion wird nun normal weiter ausgeführt.
+                        // Weiter normal ausführen.
                     } else {
                         // Nein, es ist immer noch zu kalt. Anlage bleibt aus.
                         $this->log(1, 'emergency_shutdown_maintained', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
@@ -156,8 +156,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             // === ENDE NOT-AUS-LOGIK ===
             // =================================================================
 
-            // Ab hier beginnt Ihre exakte, bestehende und funktionierende Logik.
-            
+            // Override-Modus blockiert die normale Regelung
             $override = GetValue($this->GetIDForIdent('OverrideActive'));
             if ($override) {
                 $this->log(2, 'override_active_mode_process');
@@ -178,19 +177,24 @@ class Zoning_and_Demand_Manager extends IPSModule
                 return;
             }
 
+            // ---- Stateful Hysteresis (per room) ----
             $anyDemand = false;
+            $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
+            $hmap = $this->getHystState(); // { roomName => bool }
 
             foreach ($rooms as $room) {
                 $name = (string)($room['name'] ?? 'room');
-                $coolingPhaseVarID = (int)($room['coolingPhaseInfoID'] ?? 0);
+                $coolingPhaseVarID  = (int)($room['coolingPhaseInfoID'] ?? 0);
                 $airSollStatusVarID = (int)($room['airSollStatusID'] ?? 0);
-                $demandVarID = (int)($room['demandID'] ?? 0);
+                $demandVarID        = (int)($room['demandID'] ?? 0);
 
+                // Fenster-Override hat Vorrang
                 if ($this->isWindowOpenStable($room)) {
                     $this->setFlap($room, false);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 3);
-                    if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 0);
-                    $this->log(3, 'room_window_open_flap_closed', ['room'=>$name]);
+                    if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
+                    $hmap[$name] = false; // Hysterese-Zustand zurücksetzen
+                    $this->log(3, 'room_window_open_flap_closed', ['room' => $name]);
                     continue;
                 }
 
@@ -198,35 +202,55 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $roomHasDemand = false;
 
                 if ($roomMode === 2) {
-                    $ist = $this->GetFloat((int)($room['tempID'] ?? 0));
+                    // Direkter Vergleich (ohne Hysterese), Hysterese-Map nur spiegeln
+                    $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
                     $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
-                    if (is_finite($ist) && is_finite($soll) && $ist > $soll) {
-                        $roomHasDemand = true;
-                    } else {
-                        if ($airSollStatusVarID > 0) $this->writeVarSmart($airSollStatusVarID, 1);
+                    $roomHasDemand = (is_finite($ist) && is_finite($soll) && $ist > $soll);
+                    $hmap[$name] = $roomHasDemand;
+                    if (!$roomHasDemand && $airSollStatusVarID > 0) {
+                        $this->writeVarSmart($airSollStatusVarID, 1);
                     }
                 } elseif ($roomMode === 3) {
-                    $ist = $this->GetFloat((int)($room['tempID'] ?? 0));
+                    // Echte Hysterese mit Gedächtnis:
+                    //  - Wenn vorher AUS: AN bei (ist - soll) >= hyst
+                    //  - Wenn vorher AN : AN bis (ist - soll) <= 0
+                    $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
                     $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
-                    $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
-                    if (is_finite($ist) && is_finite($soll) && ($ist - $soll) > $hyst) {
-                        $roomHasDemand = true;
+                    $prev = (bool)($hmap[$name] ?? false);
+
+                    if (!is_finite($ist) || !is_finite($soll)) {
+                        $this->log(1, 'hyst_invalid_values', ['room'=>$name,'ist'=>$ist,'soll'=>$soll]);
+                        $roomHasDemand = false;
+                    } else {
+                        $delta = $ist - $soll;
+                        $roomHasDemand = $prev ? ($delta > 0.0) : ($delta >= $hyst);
+                        $this->log(3, 'hyst_eval', [
+                            'room'=>$name,'prev'=>$prev,'ist'=>$ist,'soll'=>$soll,
+                            'delta'=>$delta,'on_thr'=>$hyst,'off_thr'=>0.0,'new'=>$roomHasDemand
+                        ]);
                     }
+                    $hmap[$name] = $roomHasDemand;
+                } else {
+                    // Mode 1 oder unbekannt: kein Bedarf
+                    $hmap[$name] = false;
                 }
 
                 if ($roomHasDemand) {
                     $this->setFlap($room, true);
                     $anyDemand = true;
-                    if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 3);
+                    if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 3);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 2);
                     $this->log(2, 'room_demand_on', ['room' => $name, 'mode' => $roomMode]);
                 } else {
                     $this->setFlap($room, false);
-                    if ($demandVarID > 0) $this->writeVarSmart($demandVarID, 0);
+                    if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 0);
                     $this->log(2, 'room_demand_off', ['room' => $name, 'mode' => $roomMode]);
                 }
             }
+
+            // Persistiere Hysterese-Zustände einmal pro Tick
+            $this->setHystState($hmap);
 
             $this->log(2, 'DECIDE_SYSTEM', ['anyDemand' => $anyDemand]);
             if ($anyDemand) {
@@ -246,9 +270,10 @@ class Zoning_and_Demand_Manager extends IPSModule
         } finally {
             $this->guardLeave();
         }
-               // ---- Trigger ACIPS OUTSIDE the semaphore (avoids deadlock) ----
+
+        // ---- Trigger ACIPS OUTSIDE the semaphore (avoids deadlock) ----
         if ($shouldTickACIPS) {
-            $acipsID = (int)$this->ReadPropertyInteger('AdaptiveInstanceID');
+            $acipsID = (int)$this->ReadPropertyInteger('AdaptiveInstanceID'));
             if ($acipsID > 0 && IPS_InstanceExists($acipsID)) {
                 // Fire-and-forget wrapper call
                 @IPS_RunScriptText('ACIPS_ProcessLearning(' . $acipsID . ');');
@@ -257,8 +282,8 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $this->log(1, 'acips_not_configured_for_trigger', ['acipsID' => $acipsID]);
             }
         }
-    
     }
+
 
     // ---------- Public (Orchestrator APIs) ----------
 
@@ -378,6 +403,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $activeRooms = [];
 
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
+        $hmap = $this->getHystState(); // latched hysteresis states { roomName => bool }
 
         // --- Kalibrierungsmodus erkennen ---
         $override = GetValue($this->GetIDForIdent('OverrideActive'));
@@ -397,13 +423,14 @@ class Zoning_and_Demand_Manager extends IPSModule
         ]);
 
         foreach ($rooms as $r) {
-            $name = (string)($r['name'] ?? 'room');
+            $name    = (string)($r['name'] ?? 'room');
             $nameKey = mb_strtolower(trim($name));
 
             $ist  = $this->GetFloat((int)($r['tempID'] ?? 0));
             $soll = $this->GetFloat((int)($r['targetID'] ?? 0));
             $win  = $this->isWindowOpenStable($r);
             $anyWindow = $anyWindow || $win;
+
             $effectiveDemand = false;
 
             if ($calibMode) {
@@ -421,8 +448,13 @@ class Zoning_and_Demand_Manager extends IPSModule
                     $dem = (int)@GetValue($demVarID);
                     $effectiveDemand = ($dem === 2 || $dem === 3);
                     $this->log(3, 'agg_demand_var', ['room' => $name, 'dem' => $dem, 'effectiveDemand' => $effectiveDemand]);
+                } elseif (array_key_exists($name, $hmap)) {
+                    // Verwende den gelatchten Hysterese-Zustand, falls vorhanden
+                    $effectiveDemand = (bool)$hmap[$name];
+                    $this->log(3, 'agg_hyst_state_used', ['room' => $name, 'state' => $effectiveDemand]);
                 } elseif (is_finite($ist) && is_finite($soll)) {
-                    $effectiveDemand = (($ist - $soll) > $hyst);
+                    // Letzter Rückfall: einmalige Schwellenprüfung (ON-Schwelle)
+                    $effectiveDemand = (($ist - $soll) >= $hyst);
                     $this->log(3, 'agg_delta_fallback', ['room' => $name, 'ist' => $ist, 'soll' => $soll, 'eff' => $effectiveDemand]);
                 }
             }
@@ -454,6 +486,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         return json_encode($agg);
     }
+
   
 
     public function GetRoomConfigurations(): string
@@ -725,6 +758,51 @@ class Zoning_and_Demand_Manager extends IPSModule
         return false;
     }
 
+    private function getHystState(): array
+    {
+        $raw = @$this->ReadAttributeString('RoomHystState');
+        if (!is_string($raw) || $raw === '') return [];
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            $this->log(1, 'hyststate_json_invalid', ['raw'=>$raw]);
+            return [];
+        }
+        return $data;
+    }
+
+    private function setHystState(array $m): void
+    {
+        $json = json_encode($m, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            $this->log(1, 'hyststate_json_encode_failed');
+            return;
+        }
+        $this->WriteAttributeString('RoomHystState', $json);
+    }
+
+    /**
+     * Stateful cooling hysteresis:
+     *  - If previously OFF:  turn ON when (ist - soll) >= hyst
+     *  - If previously ON:   stay ON while (ist - soll) > 0, turn OFF when <= 0
+     */
+    private function decideHysteresisCooling(string $roomName, float $ist, float $soll, float $hyst, bool $prevOn): bool
+    {
+        if (!is_finite($ist) || !is_finite($soll)) {
+            $this->log(1, 'hyst_invalid_values', ['room'=>$roomName,'ist'=>$ist,'soll'=>$soll]);
+            return false; // fail-safe OFF
+        }
+        $delta = $ist - $soll;
+
+        $newOn = $prevOn
+            ? ($delta > 0.0)          // OFF when cooled to/below setpoint
+            : ($delta >= $hyst);      // ON when exceeding ON threshold
+
+        $this->log(3, 'hyst_eval', [
+            'room'=>$roomName, 'prev'=>$prevOn, 'ist'=>$ist, 'soll'=>$soll,
+            'delta'=>$delta, 'on_thr'=>$hyst, 'off_thr'=>0.0, 'new'=>$newOn
+        ]);
+        return $newOn;
+    }
 
     /**
      * Collect variable IDs contained in a category, following links and (optionally) subcategories.
