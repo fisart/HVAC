@@ -491,14 +491,25 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function HandleCoilBelowThreshold(float $coilTemp, float $threshold): void
     {
-        // Keep it lightweight; ProcessZoning() already has emergency logic.
-        $this->log(2, 'coil_temp_event', ['coilTemp'=>$coilTemp, 'threshold'=>$threshold]);
+        // Latch emergency and hard-stop the system right now
+        $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
+        $this->log(0, 'EMERGENCY_BY_EVENT', ['coilTemp'=>$coilTemp, 'threshold'=>$threshold]);
 
-        // Optional immediate safety action (uncomment if you want the event to enforce shutdown instantly):
-        // $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
-        // $this->systemOff();
-        // $this->applyAllFlaps(false);
+        // Do the shutdown safely inside the module semaphore
+        if ($this->guardEnter()) {
+            try {
+                $this->systemOff();
+                $this->applyAllFlaps(false);
+            } finally {
+                $this->guardLeave();
+            }
+        } else {
+            // Fallback: still enforce shutdown even if semaphore is busy
+            $this->systemOff();
+            $this->applyAllFlaps(false);
+        }
     }
+
 
 
     public function GetRoomConfigurations(): string
