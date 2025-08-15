@@ -547,6 +547,7 @@ class adaptive_HVAC_control extends IPSModule
         }
 
         $r = $comfort + $energy + $windowPenalty + $penalty + $progress + $freeze + $trend;
+        $r = max(-1.5, min($r, 0.25));
         return (float)round($r, 4);
     }
 
