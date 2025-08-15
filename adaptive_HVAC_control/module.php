@@ -50,6 +50,9 @@ class adaptive_HVAC_control extends IPSModule
 
         // Sensors
         $this->RegisterPropertyInteger('CoilTempLink', 0);
+        $this->RegisterAttributeFloat('CoilNoisePerMin', 0.0); // from calibration (e.g. 0.00825)
+        $this->RegisterAttributeInteger('LastTrendBin', 0);    // -1/0/+1 hysteresis memory
+
 
         // Rooms
         $this->RegisterPropertyString('MonitoredRooms', '[]');
@@ -230,9 +233,10 @@ class adaptive_HVAC_control extends IPSModule
             $this->log(3, 'state_N_from_ZDM', ['N' => (int)($state['numActiveRooms'] ?? -1)]);
 
             $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-            $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
-                ? (float)$prevMeta['coil']
-                : ($state['coilTemp'] ?? null);
+            $prevCoil = (is_array($prevMeta) && isset($prevMeta['coilRaw']))
+                ? (float)$prevMeta['coilRaw']
+                : ($state['coilRaw'] ?? null);
+
 
             // Compute readable/bucket key (no md5)
             $sKeyNew  = $this->stateKeyBuckets($state, is_numeric($prevCoil) ? (float)$prevCoil : null);
@@ -274,7 +278,7 @@ class adaptive_HVAC_control extends IPSModule
                 'stateKey' => $sKeyNew,              // << use bucketed key here
                 'action'   => $p . ':' . $f,
                 'wad'      => $metrics['rawWAD'] ?? 0.0,
-                'coil'     => $metrics['coilTemp'],
+                'coilRaw'  => $metrics['coilRaw'],
                 'maxDelta' => $state['maxDelta'],
                 'ts'       => time()
             ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
@@ -315,9 +319,9 @@ class adaptive_HVAC_control extends IPSModule
         $this->log(3, 'state_N_from_ZDM', ['N' => (int)($state['numActiveRooms'] ?? -1)]);
 
         $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
-            ? (float)$prevMeta['coil']
-            : ($state['coilTemp'] ?? null);
+        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coilRaw']))
+            ? (float)$prevMeta['coilRaw']
+            : ($state['coilRaw'] ?? null);
 
         $sKeyNew  = $this->stateKeyBuckets($state, is_numeric($prevCoil) ? (float)$prevCoil : null);
         $this->rememberStateLabel($sKeyNew, $label);
@@ -341,7 +345,7 @@ class adaptive_HVAC_control extends IPSModule
             'stateKey' => $sKeyNew,              // << use bucketed key here
             'action'   => $p . ':' . $f,
             'wad'      => $metrics['rawWAD'] ?? 0.0,
-            'coil'     => $metrics['coilTemp'],
+            'coilRaw'  => $metrics['coilRaw'],
             'maxDelta' => $state['maxDelta'],
             'ts'       => time()
         ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
@@ -407,37 +411,39 @@ class adaptive_HVAC_control extends IPSModule
 
     private function buildStateVector(): array
     {
-        // 1) N from ZDM (SSOT)
+        // SSOT for N
         $n = $this->getNFromZDM();
 
-        // 2) maxDelta: prefer ZDM aggregate; fallback to local calc
+        // maxDelta: prefer ZDM aggregate; fallback to local
         $agg = $this->fetchZDMAggregates();
         $maxDelta = 0.0;
         if (is_array($agg) && isset($agg['maxDeltaT'])) {
             $maxDelta = (float)$agg['maxDeltaT'];
         } else {
             $rooms = $this->getRooms();
-            $hyst  = (float)$this->ReadPropertyFloat('Hysteresis');
+            $hyst  = (float)$this->ReadPropertyFloat('Hysteresis'); // keep ≥0.15°C
             foreach ($rooms as $r) {
                 $ist  = $this->getFloat((int)($r['tempID'] ?? 0));
                 $soll = $this->getFloat((int)($r['targetID'] ?? 0));
                 if (is_finite($ist) && is_finite($soll)) {
-                    $delta = $ist - $soll;
-                    if ($delta > $hyst) $maxDelta = max($maxDelta, $delta);
+                    $d = $ist - $soll;
+                    if ($d > $hyst) $maxDelta = max($maxDelta, $d);
                 }
             }
         }
 
-        // 3) coil
-        $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
+        // Coil (raw + cosmetic rounded)
+        $coilRaw = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
+        $coil    = is_finite($coilRaw) ? (float)$coilRaw : NAN;
 
-        // 4) assemble (no duplicate keys, no mixing with local N)
         return [
             'numActiveRooms' => max(0, (int)$n),
             'maxDelta'       => round((float)$maxDelta, 2),
-            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null,
+            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null,  // for UI/labels
+            'coilRaw'        => is_finite($coil) ? $coil : null             // for trend
         ];
     }
+
 
 
 
@@ -474,7 +480,8 @@ class adaptive_HVAC_control extends IPSModule
             'hotRooms' => $hotRooms,
             'maxDev'   => round($maxDev, 3),
             'D_cold'   => round($D_cold, 3),
-            'coilTemp' => is_finite($coil) ? round($coil, 3) : null
+            'coilTemp' => is_finite($coil) ? round($coil, 3) : null // cosmetic
+            'coilRaw'  => is_finite($coil) ? (float)$coil : null     // used for trend
         ];
     }
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
@@ -486,20 +493,27 @@ class adaptive_HVAC_control extends IPSModule
         $wProgress = (float)$this->ReadPropertyFloat('W_Progress');       // 10.0
         $wFreeze   = (float)$this->ReadPropertyFloat('W_Freeze');         // 2.0
         $wTrend    = (float)$this->ReadPropertyFloat('W_Trend');          // 2.0
-        $epsTrend  = (float)$this->ReadPropertyFloat('TrendEps');         // 0.10
+        $epsTrend  = (float)$this->ReadPropertyFloat('TrendEps');         // 0.10 (used here as delta deadband)
         $wWindow   = (float)$this->ReadPropertyFloat('W_Window');         // 0.0 by default
 
-        // Base terms
-        $comfort = -$wComfort * (float)($state['maxDelta'] ?? 0.0);              // want Δ↓
-        $energy  = -$wEnergy  * (float)(($action['p'] ?? 0) + ($action['f'] ?? 0)); // want power/fan↓
+        // Minutes since previous step (time normalization)
+        $dtm = $this->getStepMinutes(); // e.g. 2.0 for 2 min, 5.0 for 5 min
 
-        // Optional window penalty (kept generic, defaults to off)
+        // Base terms as time integrals per step
+        // Comfort: penalize ΔT proportionally to how long it persisted
+        $comfort = -$wComfort * (float)($state['maxDelta'] ?? 0.0) * $dtm;                 // ΔT * minutes
+
+        // Energy: penalize (power + fan) proportionally to run time
+        $energy  = -$wEnergy  * (float)(($action['p'] ?? 0) + ($action['f'] ?? 0)) * $dtm; // (p+f) * minutes
+
+        // Optional window penalty (kept as per-step constant; set W_Window=0 to disable)
+        // If you want it strictly per-minute too, multiply by $dtm.
         $windowPenalty = 0.0;
         if ($wWindow > 0 && !empty($state['anyWindowOpen'])) {
-            $windowPenalty = -$wWindow;
+            $windowPenalty = -$wWindow; // or: -$wWindow * $dtm;
         }
 
-        // Change penalty (discourage big jumps)
+        // Change penalty (discourage big jumps) — per change, not per minute
         $penalty = 0.0;
         if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
             $dp = abs(((int)$m[1]) - (int)($action['p'] ?? 0));
@@ -507,7 +521,7 @@ class adaptive_HVAC_control extends IPSModule
             $penalty = -$wChange * ($dp + $df);
         }
 
-        // Progress shaping: improvement of WAD (weighted average deviation) since last step
+        // Progress shaping: improvement of WAD since last step (already a delta; no time scaling)
         $progress = 0.0;
         if ($metrics && $prevMeta && isset($prevMeta['wad'])) {
             $progress = $wProgress * ( ((float)$prevMeta['wad']) - ((float)($metrics['rawWAD'] ?? 0.0)) );
@@ -523,7 +537,7 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        // Comfort trend shaping: reward ΔT decreasing (positive delta), penalize increasing
+        // Comfort trend shaping: reward ΔT decreasing, penalize increasing (per-step delta; no time scaling)
         $trend = 0.0;
         if ($prevMeta && isset($prevMeta['maxDelta']) && isset($state['maxDelta'])) {
             $delta = ((float)$prevMeta['maxDelta']) - ((float)$state['maxDelta']); // >0 = improving
@@ -1180,20 +1194,49 @@ class adaptive_HVAC_control extends IPSModule
         return 3;
     }
 
-    private function binT(?float $coil, ?float $prevCoil): int {
-        if (!is_numeric($coil) || !is_numeric($prevCoil)) return 0;
-        $d = $coil - $prevCoil;
-        if ($d < -0.2) return -1;
-        if ($d >  0.2) return  1;
-        return 0;
+    private function getStepMinutes(): float
+    {
+        $now  = time();
+        $prev = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
+        $last = (is_array($prev) && isset($prev['ts'])) ? (int)$prev['ts'] : ($now - max(60, (int)$this->ReadPropertyInteger('TimerInterval')));
+        return max(1, $now - $last) / 60.0;
     }
+
+    private function binT(?float $coil, ?float $prevCoil): int
+    {
+        if (!is_numeric($coil) || !is_numeric($prevCoil)) return 0;
+
+        // slope in °C per minute (no rounding)
+        $dtm   = $this->getStepMinutes();
+        if ($dtm <= 0) return 0;
+        $slope = ((float)$coil - (float)$prevCoil) / $dtm;
+
+        // threshold per minute = max(base, 3σ_noise)
+        $base  = (float)$this->ReadPropertyFloat('TrendEps');               // interpret as °C/min
+        $noise = (float)$this->ReadAttributeFloat('CoilNoisePerMin');       // set via calibration
+        $thr   = max($base, 3.0 * $noise);
+
+        // Schmitt hysteresis to prevent chatter
+        $lastT = (int)$this->ReadAttributeInteger('LastTrendBin');          // -1/0/+1
+        $hyst  = 0.5 * $thr;
+        $up    =  $thr - ($lastT ===  1 ? $hyst : 0.0);
+        $down  = -$thr + ($lastT === -1 ? $hyst : 0.0);
+
+        $t = $lastT;
+        if     ($slope >= $up)   $t =  1;
+        elseif ($slope <= $down) $t = -1;
+
+        if ($t !== $lastT) $this->WriteAttributeInteger('LastTrendBin', $t);
+        return $t;
+    }
+
 
     /** New readable state key: N|D|C|T (no window bin) */
     private function stateKeyBuckets(array $raw, ?float $prevCoil = null): string {
         $n = $this->binN((int)($raw['numActiveRooms'] ?? 0));
         $d = $this->binD((float)($raw['maxDelta'] ?? 0.0));
         $c = $this->binC(($raw['coilTemp'] ?? null), (float)$this->ReadPropertyFloat('MinCoilTempLearning'));
-        $t = $this->binT(($raw['coilTemp'] ?? null), $prevCoil);
+        $t = $this->binT(($raw['coilRaw'] ?? null), $prevCoil);
         return "N{$n}|D{$d}|C{$c}|T{$t}";
     }
 
