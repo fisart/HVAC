@@ -480,7 +480,7 @@ class adaptive_HVAC_control extends IPSModule
             'hotRooms' => $hotRooms,
             'maxDev'   => round($maxDev, 3),
             'D_cold'   => round($D_cold, 3),
-            'coilTemp' => is_finite($coil) ? round($coil, 3) : null // cosmetic
+            'coilTemp' => is_finite($coil) ? round($coil, 3) : null, // cosmetic
             'coilRaw'  => is_finite($coil) ? (float)$coil : null     // used for trend
         ];
     }
