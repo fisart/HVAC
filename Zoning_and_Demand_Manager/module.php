@@ -536,51 +536,26 @@ class Zoning_and_Demand_Manager extends IPSModule
     // }
     public function GetEffectiveDemand(): string
     {
-        // NOTE: Adjust this loader to your real room config property if the key differs.
-        $rooms = json_decode($this->ReadPropertyString('Rooms') ?: '[]', true);
-        if (!is_array($rooms)) { $rooms = []; }
+        // Do NOT read a "Rooms" property (may not exist). Use Aggregates instead.
+        // GetAggregates() should already reflect window suppression, debounce, enable flags, etc.
+        $aggJson = $this->GetAggregates();                  // public method in the same module
+        $agg = json_decode((string)$aggJson, true);
+        $N = (is_array($agg) && isset($agg['numActiveRooms'])) ? (int)$agg['numActiveRooms'] : 0;
 
-        $roomsCounted  = [];
-        $roomsExcluded = [];
-
-        foreach ($rooms as $r) {
-            // Expected shape per room (adjust keys if your schema differs):
-            // { "Name": "Living", "Enabled": true, "DemandVarID": 12345, "WindowVarID": 11111 }
-            $enabled     = (bool)($r['Enabled']      ?? true);
-            $demandVarID = (int) ($r['DemandVarID']  ?? 0);
-            $windowVarID = (int) ($r['WindowVarID']  ?? 0);
-            $roomID      = (int) ($r['RoomID']       ?? ($r['ID'] ?? 0));
-
-            if (!$enabled) {
-                $roomsExcluded[] = ['id' => $roomID, 'reason' => 'disabled'];
-                continue;
-            }
-
-            $dVal = $demandVarID > 0 ? (int)@GetValueInteger($demandVarID) : 0;
-            $isDemand = in_array($dVal, [2, 3], true); // 1 = kein Bedarf, 2/3 = Bedarf
-
-            if (!$isDemand) {
-                $roomsExcluded[] = ['id' => $roomID, 'reason' => 'no_demand'];
-                continue;
-            }
-
-            $winOpen = $windowVarID > 0 ? (bool)@GetValueBoolean($windowVarID) : false;
-            if ($winOpen) {
-                $roomsExcluded[] = ['id' => $roomID, 'reason' => 'window_open'];
-                continue;
-            }
-
-            $roomsCounted[] = $roomID;
-        }
-
-        $out = [
+        return json_encode([
             'ts'            => time(),
-            'N'             => count($roomsCounted),
-            'roomsCounted'  => $roomsCounted,
-            'roomsExcluded' => $roomsExcluded
-        ];
+            'N'             => $N,
+            'roomsCounted'  => [],   // not available in this minimal variant
+            'roomsExcluded' => []
+        ]);
+    }
 
-        return json_encode($out);
+    // Optional helper returning array
+    public function GetEffectiveDemandArray(): array
+    {
+        $j = $this->GetEffectiveDemand();
+        $a = json_decode($j, true);
+        return is_array($a) ? $a : ['ts'=>time(),'N'=>0,'roomsCounted'=>[],'roomsExcluded'=>[]];
     }
 
     // Optional array-returning variant (handy in PHP):
