@@ -634,7 +634,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     {
         // Only act if we are actually in emergency
         if (!$this->ReadAttributeBoolean('EmergencyShutdownActive')) {
-            $this->log(3, 'restart_event_ignored_not_in_emergency', ['coilTemp'=>$coilTemp, 'thr'=>$restartThr]);
+            //$this->log(3, 'restart_event_ignored_not_in_emergency', ['coilTemp'=>$coilTemp, 'thr'=>$restartThr]);
             return;
         }
 
