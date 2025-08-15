@@ -523,6 +523,73 @@ class Zoning_and_Demand_Manager extends IPSModule
         return json_encode($agg);
     }
 
+    // Returns a JSON string with the effective demand snapshot:
+    // {
+    //   "ts": 1734300000,
+    //   "N": 3,
+    //   "roomsCounted": [12345, 23456, 34567],
+    //   "roomsExcluded": [
+    //     {"id": 45678, "reason": "disabled"},
+    //     {"id": 56789, "reason": "window_open"},
+    //     {"id": 67890, "reason": "no_demand"}
+    //   ]
+    // }
+    public function GetEffectiveDemand(): string
+    {
+        // NOTE: Adjust this loader to your real room config property if the key differs.
+        $rooms = json_decode($this->ReadPropertyString('Rooms') ?: '[]', true);
+        if (!is_array($rooms)) { $rooms = []; }
+
+        $roomsCounted  = [];
+        $roomsExcluded = [];
+
+        foreach ($rooms as $r) {
+            // Expected shape per room (adjust keys if your schema differs):
+            // { "Name": "Living", "Enabled": true, "DemandVarID": 12345, "WindowVarID": 11111 }
+            $enabled     = (bool)($r['Enabled']      ?? true);
+            $demandVarID = (int) ($r['DemandVarID']  ?? 0);
+            $windowVarID = (int) ($r['WindowVarID']  ?? 0);
+            $roomID      = (int) ($r['RoomID']       ?? ($r['ID'] ?? 0));
+
+            if (!$enabled) {
+                $roomsExcluded[] = ['id' => $roomID, 'reason' => 'disabled'];
+                continue;
+            }
+
+            $dVal = $demandVarID > 0 ? (int)@GetValueInteger($demandVarID) : 0;
+            $isDemand = in_array($dVal, [2, 3], true); // 1 = kein Bedarf, 2/3 = Bedarf
+
+            if (!$isDemand) {
+                $roomsExcluded[] = ['id' => $roomID, 'reason' => 'no_demand'];
+                continue;
+            }
+
+            $winOpen = $windowVarID > 0 ? (bool)@GetValueBoolean($windowVarID) : false;
+            if ($winOpen) {
+                $roomsExcluded[] = ['id' => $roomID, 'reason' => 'window_open'];
+                continue;
+            }
+
+            $roomsCounted[] = $roomID;
+        }
+
+        $out = [
+            'ts'            => time(),
+            'N'             => count($roomsCounted),
+            'roomsCounted'  => $roomsCounted,
+            'roomsExcluded' => $roomsExcluded
+        ];
+
+        return json_encode($out);
+    }
+
+    // Optional array-returning variant (handy in PHP):
+    public function GetEffectiveDemandArray(): array
+    {
+        $j = $this->GetEffectiveDemand();
+        $a = json_decode($j, true);
+        return is_array($a) ? $a : ['ts'=>time(),'N'=>0,'roomsCounted'=>[],'roomsExcluded'=>[]];
+    }
 
     public function HandleCoilBelowThreshold(float $coilTemp, float $threshold): void
     {

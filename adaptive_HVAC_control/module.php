@@ -227,6 +227,7 @@ class adaptive_HVAC_control extends IPSModule
             // ---- Build current state and readable bucket key ----
             $state    = $this->buildStateVector();
             $label    = $this->formatStateLabel($state);
+            $this->log(3, 'state_N_from_ZDM', ['N' => (int)($state['numActiveRooms'] ?? -1)]);
 
             $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
             $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
@@ -311,6 +312,7 @@ class adaptive_HVAC_control extends IPSModule
         // ---- Build current state and readable bucket key ----
         $state    = $this->buildStateVector();
         $label    = $this->formatStateLabel($state);
+        $this->log(3, 'state_N_from_ZDM', ['N' => (int)($state['numActiveRooms'] ?? -1)]);
 
         $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
         $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
@@ -405,39 +407,41 @@ class adaptive_HVAC_control extends IPSModule
 
     private function buildStateVector(): array
     {
-        $rooms = $this->getRooms();
-        $hyst  = (float)$this->ReadPropertyFloat('Hysteresis');
+        // 1) N from ZDM (SSOT)
+        $n = $this->getNFromZDM();
 
-        $numActive = 0;
-        $maxDelta  = 0.0;
+        // 2) Pull ZDM aggregates (for maxΔT if available)
+        $agg = $this->fetchZDMAggregates();
 
-        foreach ($rooms as $r) {
-            $ist  = $this->getFloat((int)($r['tempID'] ?? 0));
-            $soll = $this->getFloat((int)($r['targetID'] ?? 0));
-            if (is_finite($ist) && is_finite($soll)) {
-                $delta = $ist - $soll;
-                if ($delta > $hyst) {
-                    $numActive++;
-                    $maxDelta = max($maxDelta, $delta);
+        // 3) Determine maxDelta (prefer ZDM; fallback to local calculation)
+        $maxDelta = 0.0;
+        if (is_array($agg) && isset($agg['maxDeltaT'])) {
+            $maxDelta = (float)$agg['maxDeltaT'];
+        } else {
+            // Fallback: compute locally only if ZDM didn't supply maxDeltaT
+            $rooms = $this->getRooms();
+            $hyst  = (float)$this->ReadPropertyFloat('Hysteresis');
+            foreach ($rooms as $r) {
+                $ist  = $this->getFloat((int)($r['tempID'] ?? 0));
+                $soll = $this->getFloat((int)($r['targetID'] ?? 0));
+                if (is_finite($ist) && is_finite($soll)) {
+                    $delta = $ist - $soll;
+                    if ($delta > $hyst) $maxDelta = max($maxDelta, $delta);
                 }
             }
         }
 
-        // ZDM aggregates (still used for active rooms / max ΔT)
-        $agg = $this->fetchZDMAggregates();
-        if ($agg) {
-            $numActive = max($numActive, (int)($agg['numActiveRooms'] ?? 0));
-            $maxDelta  = max($maxDelta, (float)($agg['maxDeltaT'] ?? 0.0));
-        }
-
+        // 4) Coil temperature
         $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
 
+        // 5) Assemble state vector (N strictly from ZDM; no mixing with local)
         return [
-            'numActiveRooms' => $numActive,
-            'maxDelta'       => round($maxDelta, 2),
+            'numActiveRooms' => max(0, (int)$n),                         // SSOT: N
+            'maxDelta'       => round((float)$maxDelta, 2),              // comfort proxy
             'coilTemp'       => is_finite($coil) ? round($coil, 2) : null
         ];
     }
+
 
 
     private function computeRoomMetrics(): array
@@ -1129,6 +1133,26 @@ class adaptive_HVAC_control extends IPSModule
 
 
     /* ---------- Bucketing helpers + readable state key (ADD) ---------- */
+    private function getNFromZDM(): int
+    {
+        $zdmID = (int)$this->ReadPropertyInteger('ZDM_InstanceID');
+        if ($zdmID <= 0) return -1;
+
+        // Prefer array variant if available
+        if (function_exists('ZDM_GetEffectiveDemandArray')) {
+            $agg = @ZDM_GetEffectiveDemandArray($zdmID);
+        } else {
+            if (!function_exists('ZDM_GetEffectiveDemand')) return -1;
+            $j = @ZDM_GetEffectiveDemand($zdmID);
+            $agg = is_string($j) ? json_decode($j, true) : null;
+        }
+
+        if (is_array($agg) && isset($agg['N'])) {
+            return (int)$agg['N'];
+        }
+        return -1;
+    }
+
 
     private function binN(int $n): int {
         if ($n <= 0) return 0;
