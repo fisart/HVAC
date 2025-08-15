@@ -547,13 +547,8 @@ class Zoning_and_Demand_Manager extends IPSModule
         ]);
     }
 
-    // Optional helper returning array
-    public function GetEffectiveDemandArray(): array
-    {
-        $j = $this->GetEffectiveDemand();
-        $a = json_decode($j, true);
-        return is_array($a) ? $a : ['ts'=>time(), 'N'=>0, 'roomsCounted'=>[], 'roomsExcluded'=>[]];
-    }
+
+
 
     // Optional array-returning variant (handy in PHP):
     public function GetEffectiveDemandArray(): array
