@@ -1063,6 +1063,8 @@ class adaptive_HVAC_control extends IPSModule
         .weights-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 2px}
         .chip{border:1px solid #ddd;border-radius:8px;padding:6px 8px;background:#fff}
         .chip b{display:block;font-weight:700;margin-bottom:2px}
+        /* NEW: scroll wrapper to enable vertical scrolling when tall */
+        .qtbl-wrap{max-height:70vh;overflow:auto;border:1px solid #ddd;margin:6px 0}
         </style>';
 
         // Explanation (unchanged) + NEW: live reward weights
@@ -1108,7 +1110,7 @@ class adaptive_HVAC_control extends IPSModule
         </details>';
 
         // Build table (2 decimals as agreed)
-        $html .= '<table class="qtbl"><thead><tr><th class="state">State</th>';
+        $html .= '<div class="qtbl-wrap"><table class="qtbl"><thead><tr><th class="state">State</th>';
         foreach ($actions as $a) $html .= '<th>'.htmlspecialchars($a).'</th>';
         $html .= '</tr></thead><tbody>';
 
@@ -1136,10 +1138,9 @@ class adaptive_HVAC_control extends IPSModule
             $html .= '</tr>';
         }
 
-        $html .= '</tbody></table>';
+        $html .= '</tbody></table></div>';
         return $html;
     }
-
 
 
 
