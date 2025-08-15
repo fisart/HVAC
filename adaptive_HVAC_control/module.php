@@ -410,15 +410,12 @@ class adaptive_HVAC_control extends IPSModule
         // 1) N from ZDM (SSOT)
         $n = $this->getNFromZDM();
 
-        // 2) Pull ZDM aggregates (for maxΔT if available)
+        // 2) maxDelta: prefer ZDM aggregate; fallback to local calc
         $agg = $this->fetchZDMAggregates();
-
-        // 3) Determine maxDelta (prefer ZDM; fallback to local calculation)
         $maxDelta = 0.0;
         if (is_array($agg) && isset($agg['maxDeltaT'])) {
             $maxDelta = (float)$agg['maxDeltaT'];
         } else {
-            // Fallback: compute locally only if ZDM didn't supply maxDeltaT
             $rooms = $this->getRooms();
             $hyst  = (float)$this->ReadPropertyFloat('Hysteresis');
             foreach ($rooms as $r) {
@@ -431,14 +428,14 @@ class adaptive_HVAC_control extends IPSModule
             }
         }
 
-        // 4) Coil temperature
+        // 3) coil
         $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
 
-        // 5) Assemble state vector (N strictly from ZDM; no mixing with local)
+        // 4) assemble (no duplicate keys, no mixing with local N)
         return [
-            'numActiveRooms' => max(0, (int)$n),                         // SSOT: N
-            'maxDelta'       => round((float)$maxDelta, 2),              // comfort proxy
-            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null
+            'numActiveRooms' => max(0, (int)$n),
+            'maxDelta'       => round((float)$maxDelta, 2),
+            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null,
         ];
     }
 

@@ -536,17 +536,14 @@ class Zoning_and_Demand_Manager extends IPSModule
     // }
     public function GetEffectiveDemand(): string
     {
-        // Do NOT read a "Rooms" property (may not exist). Use Aggregates instead.
-        // GetAggregates() should already reflect window suppression, debounce, enable flags, etc.
-        $aggJson = $this->GetAggregates();                  // public method in the same module
-        $agg = json_decode((string)$aggJson, true);
+        $agg = json_decode((string)$this->GetAggregates(), true);
         $N = (is_array($agg) && isset($agg['numActiveRooms'])) ? (int)$agg['numActiveRooms'] : 0;
 
         return json_encode([
             'ts'            => time(),
             'N'             => $N,
-            'roomsCounted'  => [],   // not available in this minimal variant
-            'roomsExcluded' => []
+            'roomsCounted'  => [],   // can be enriched later
+            'roomsExcluded' => [],
         ]);
     }
 
@@ -555,7 +552,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     {
         $j = $this->GetEffectiveDemand();
         $a = json_decode($j, true);
-        return is_array($a) ? $a : ['ts'=>time(),'N'=>0,'roomsCounted'=>[],'roomsExcluded'=>[]];
+        return is_array($a) ? $a : ['ts'=>time(), 'N'=>0, 'roomsCounted'=>[], 'roomsExcluded'=>[]];
     }
 
     // Optional array-returning variant (handy in PHP):
