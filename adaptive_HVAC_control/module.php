@@ -1051,7 +1051,7 @@ class adaptive_HVAC_control extends IPSModule
 
         // Basic styles (kept as before; only width added for the state column)
         $html = '<style>
-        .qtbl{border-collapse:collapse;width:100%;table-layout:fixed}
+        .qtbl{border-collapse:collapse;min-width:100%;width:max-content;table-layout:fixed}
         .qtbl th,.qtbl td{border:1px solid #ccc;padding:6px 8px;text-align:center;font:500 13px/1.3 system-ui,Segoe UI,Roboto,sans-serif}
         .qtbl th{background:#f2f2f2;position:sticky;top:0;z-index:1}
         .qtbl td.state,.qtbl th.state{font-weight:600;text-align:left;background:#fafafa;position:sticky;left:0;z-index:1;white-space:nowrap;width:'.$stateColWidth.'px;min-width:'.$stateColWidth.'px;max-width:'.$stateColWidth.'px}
