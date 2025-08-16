@@ -48,6 +48,11 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyString('CustomFanSpeeds', '0,40,80,100');
         $this->RegisterPropertyInteger('FanStep', 20);
 
+        // Compressor and Fan non linearities
+        $this->RegisterPropertyFloat('CompAlpha', 2.4);   // compressor nonlinearity p^alpha (1.3–1.6)
+        $this->RegisterPropertyFloat('FanBeta',  1.2);   // fan nonlinearity (rank^beta)
+        $this->RegisterPropertyFloat('FanWeight',0.25);  // relative weight of fan vs compressor
+
         // Sensors
         $this->RegisterPropertyInteger('CoilTempLink', 0);
         $this->RegisterAttributeFloat('CoilNoisePerMin', 0.0); // from calibration (e.g. 0.00825)
@@ -365,6 +370,19 @@ class adaptive_HVAC_control extends IPSModule
     }
 
     // -------------------- Learning Core --------------------
+    private function fanStepToNorm(int $f): float
+    {
+        // Map your discrete steps to 0..1 by rank (10<30<50<70<90).
+        $steps = [10, 30, 50, 70, 90];
+        $i = array_search($f, $steps, true);
+        if ($i === false) {
+            // If a non-standard value slips through, place it into the order
+            $steps[] = $f; sort($steps, SORT_NUMERIC);
+            $i = array_search($f, $steps, true);
+        }
+        $n = count($steps) - 1;
+        return $n > 0 ? max(0.0, min(1.0, $i / $n)) : 0.0;
+    }
 
     private function selectActionEpsilonGreedy(array $state, ?array $allowedKeys = null): array
     {
@@ -486,34 +504,40 @@ class adaptive_HVAC_control extends IPSModule
     }
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
     {
-        // Weights from form.json
-        $wComfort  = (float)$this->ReadPropertyFloat('W_Comfort');        // 1.0
-        $wEnergy   = (float)$this->ReadPropertyFloat('W_Energy');         // 0.01
-        $wChange   = (float)$this->ReadPropertyFloat('W_ChangePenalty');  // 0.002
-        $wProgress = (float)$this->ReadPropertyFloat('W_Progress');       // 10.0
-        $wFreeze   = (float)$this->ReadPropertyFloat('W_Freeze');         // 2.0
-        $wTrend    = (float)$this->ReadPropertyFloat('W_Trend');          // 2.0
-        $epsTrend  = (float)$this->ReadPropertyFloat('TrendEps');         // 0.10 (used here as delta deadband)
-        $wWindow   = (float)$this->ReadPropertyFloat('W_Window');         // 0.0 by default
+        // Weights (from form.json)
+        $wComfort  = (float)$this->ReadPropertyFloat('W_Comfort');
+        $wEnergy   = (float)$this->ReadPropertyFloat('W_Energy');
+        $wChange   = (float)$this->ReadPropertyFloat('W_ChangePenalty');
+        $wProgress = (float)$this->ReadPropertyFloat('W_Progress');
+        $wFreeze   = (float)$this->ReadPropertyFloat('W_Freeze');
+        $wTrend    = (float)$this->ReadPropertyFloat('W_Trend');
+        $epsTrend  = (float)$this->ReadPropertyFloat('TrendEps');   // deadband in °C/min
+        $wWindow   = (float)$this->ReadPropertyFloat('W_Window');
 
-        // Minutes since previous step (time normalization)
-        $dtm = $this->getStepMinutes(); // e.g. 2.0 for 2 min, 5.0 for 5 min
+        // Minutes since previous step (normalize all "per-time" effects)
+        $dtm = $this->getStepMinutes(); // e.g., 2.0 for 2 min
 
-        // Base terms as time integrals per step
-        // Comfort: penalize ΔT proportionally to how long it persisted
-        $comfort = -$wComfort * (float)($state['maxDelta'] ?? 0.0) * $dtm;                 // ΔT * minutes
+        // --- Comfort (per-minute penalty for current max ΔT) ---
+        $comfort = -$wComfort * (float)($state['maxDelta'] ?? 0.0) * $dtm;
 
-        // Energy: penalize (power + fan) proportionally to run time
-        $energy  = -$wEnergy  * (float)(($action['p'] ?? 0) + ($action['f'] ?? 0)) * $dtm; // (p+f) * minutes
+        // --- Non-linear energy proxy (per-minute) ---
+        // Compressor share grows super-linearly; fan uses discrete rank (10/30/50/70/90 → 0..1)
+        $pn    = max(0.0, min(1.0, ((float)($action['p'] ?? 0)) / 100.0));
+        $fn    = $this->fanStepToNorm((int)($action['f'] ?? 0));
+        $alpha = (float)$this->ReadPropertyFloat('CompAlpha'); // e.g., 2.2–2.6
+        $beta  = (float)$this->ReadPropertyFloat('FanBeta');   // e.g., 1.2
+        $wf    = (float)$this->ReadPropertyFloat('FanWeight'); // e.g., 0.25
 
-        // Optional window penalty (kept as per-step constant; set W_Window=0 to disable)
-        // If you want it strictly per-minute too, multiply by $dtm.
+        $energyPct = pow($pn, $alpha) + $wf * pow($fn, $beta);
+        $energy    = -$wEnergy * $energyPct * $dtm;
+
+        // --- Window penalty (per-minute if any window is open) ---
         $windowPenalty = 0.0;
         if ($wWindow > 0 && !empty($state['anyWindowOpen'])) {
-            $windowPenalty = -$wWindow; // or: -$wWindow * $dtm;
+            $windowPenalty = -$wWindow * $dtm;
         }
 
-        // Change penalty (discourage big jumps) — per change, not per minute
+        // --- Change penalty (per step; discourage large jumps) ---
         $penalty = 0.0;
         if (preg_match('/^(\d+):(\d+)$/', $this->ReadAttributeString('LastAction'), $m)) {
             $dp = abs(((int)$m[1]) - (int)($action['p'] ?? 0));
@@ -521,35 +545,38 @@ class adaptive_HVAC_control extends IPSModule
             $penalty = -$wChange * ($dp + $df);
         }
 
-        // Progress shaping: improvement of WAD since last step (already a delta; no time scaling)
+        // --- Progress shaping (delta of WAD; already a difference → no time scaling) ---
         $progress = 0.0;
         if ($metrics && $prevMeta && isset($prevMeta['wad'])) {
-            $progress = $wProgress * ( ((float)$prevMeta['wad']) - ((float)($metrics['rawWAD'] ?? 0.0)) );
+            $progress = $wProgress * (((float)$prevMeta['wad']) - ((float)($metrics['rawWAD'] ?? 0.0)));
         }
 
-        // Freeze risk shaping: penalize being below learning min coil temperature
+        // --- Freeze risk (per-minute penalty below min learning coil temp) ---
         $freeze = 0.0;
         if ($metrics) {
             $minL = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
             $coil = $metrics['coilTemp'];
             if (is_numeric($coil) && $coil < $minL) {
-                $freeze = -$wFreeze * ($minL - (float)$coil);
+                $freeze = -$wFreeze * ($minL - (float)$coil) * $dtm;
             }
         }
 
-        // Comfort trend shaping: reward ΔT decreasing, penalize increasing (per-step delta; no time scaling)
+        // --- Comfort trend (compare rate in °C/min against deadband, then scale back by minutes) ---
         $trend = 0.0;
         if ($prevMeta && isset($prevMeta['maxDelta']) && isset($state['maxDelta'])) {
-            $delta = ((float)$prevMeta['maxDelta']) - ((float)$state['maxDelta']); // >0 = improving
-            if (abs($delta) > $epsTrend) {
-                $trend = $wTrend * $delta;
+            $delta = ((float)$prevMeta['maxDelta']) - ((float)$state['maxDelta']);  // >0 = improving
+            $rate  = $delta / max(0.001, $dtm);                                     // °C per minute
+            if (abs($rate) > $epsTrend) {
+                $trend = $wTrend * $rate * $dtm; // equals wTrend * delta, with per-minute deadband
             }
         }
 
+        // Sum and clamp (keep updates stable)
         $r = $comfort + $energy + $windowPenalty + $penalty + $progress + $freeze + $trend;
         $r = max(-1.5, min($r, 0.25));
         return (float)round($r, 4);
     }
+
 
  
     /**
