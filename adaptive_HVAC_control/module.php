@@ -602,6 +602,7 @@ class adaptive_HVAC_control extends IPSModule
             'comfort'=>$comfort, 'energy'=>$energy, 'penalty'=>$penalty,
             'progress'=>$progress, 'freeze'=>$freeze, 'trend'=>$trend,
             'sum'=>$comfort+$energy+$penalty+$progress+$freeze+$trend
+            
         ]);
 
         return (float)round($r, 4);
