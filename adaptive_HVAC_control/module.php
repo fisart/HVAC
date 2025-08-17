@@ -574,6 +574,15 @@ class adaptive_HVAC_control extends IPSModule
         // Sum and clamp (keep updates stable)
         $r = $comfort + $energy + $windowPenalty + $penalty + $progress + $freeze + $trend;
         $r = max(-1.5, min($r, 0.25));
+        $this->log(3, 'r_parts', [
+            'dtm'=>$dtm,
+            'Δ'=>$state['maxDelta']??null,
+            'p'=>$action['p']??null, 'f'=>$action['f']??null,
+            'comfort'=>$comfort, 'energy'=>$energy, 'penalty'=>$penalty,
+            'progress'=>$progress, 'freeze'=>$freeze, 'trend'=>$trend,
+            'sum'=>$comfort+$energy+$penalty+$progress+$freeze+$trend
+        ]);
+
         return (float)round($r, 4);
     }
 
