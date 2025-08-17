@@ -503,24 +503,6 @@ class adaptive_HVAC_control extends IPSModule
         ];
     }
 
-
-        // Sum and clamp (keep updates stable)
-        $r = $comfort + $energy + $windowPenalty + $penalty + $progress + $freeze + $trend;
-        $r = max(-1.5, min($r, 0.25));
-
-        $this->log(3, 'r_parts', [
-        'dtm'=>$dtm,
-        'Δ_used'=>$deltaForComfort,
-        'p'=>$action['p']??null, 'f'=>$action['f']??null,
-        'comfort'=>$comfort, 'energy'=>$energy, 'penalty'=>$penalty,
-        'progress'=>$progress, 'freeze'=>$freeze, 'trend'=>$trend,
-        'sum_raw'=>$comfort+$energy+$penalty+$progress+$freeze+$trend,
-        'r_final'=>$r
-        ]);
-
-        return (float)round($r, 4);
-    }
-
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
     {
         // Weights (from form.json)
@@ -602,7 +584,7 @@ class adaptive_HVAC_control extends IPSModule
             'comfort'=>$comfort, 'energy'=>$energy, 'penalty'=>$penalty,
             'progress'=>$progress, 'freeze'=>$freeze, 'trend'=>$trend,
             'sum'=>$comfort+$energy+$penalty+$progress+$freeze+$trend
-            
+
         ]);
 
         return (float)round($r, 4);
