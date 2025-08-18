@@ -384,30 +384,43 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $roomConfig = json_decode(ZDM_GetRoomConfigurations($zoningID), true);
         $roomNames  = is_array($roomConfig) ? array_values(array_filter(array_map(function($r){
             return isset($r['name']) ? (string)$r['name'] : '';
-        }, $roomConfig), function($n){
-            return $n !== '' && $n !== '0';
-        })) : [];
+        }, $roomConfig), function($n){ return $n !== '' && $n !== '0'; })) : [];
 
         if (empty($roomNames)) {
             $this->LogMessage('ORCH generateProposedPlan: no rooms found', KL_ERROR);
             return [];
         }
 
+        // === NEW: take allowed actions directly from ACIPS, excluding 0:0
         $allActions = json_decode(ACIPS_GetActionPairs($adaptiveID), true);
-        if (!is_array($allActions)) {
-            $this->LogMessage('ORCH generateProposedPlan: ACIPS_GetActionPairs returned invalid data', KL_ERROR);
-            return [];
+        $allowed = [];
+        if (is_array($allActions)) {
+            foreach ($allActions as $a) {
+                $a = (string)$a;
+                if ($a === '0:0') continue;
+                if (strpos($a, ':') === false) continue;
+                [$p,$f] = array_map('intval', explode(':', $a, 2));
+                $allowed[] = ['k'=>$a, 'p'=>$p, 'f'=>$f, 'load'=>$p+$f];
+            }
         }
+        // sort by total load (ascending) for smooth ramps
+        usort($allowed, fn($A,$B) => $A['load'] <=> $B['load']);
 
-        $actionPattern = array_values(array_filter($allActions, function($action) {
-            if (strpos($action, ':') === false) return false;
-            list($p, $f) = explode(':', $action, 2);
-            return $p != 0
-                && in_array((string)trim($p), ['30','75','100'], true)
-                && in_array((string)trim($f), ['30','70','90'], true);
-        }));
-        if (empty($actionPattern)) $actionPattern = ['55:50', '100:100'];
-        $actionPatternString = implode(', ', $actionPattern);
+        // choose a representative subset: low/mid/high, or use all if small
+        $keys = array_column($allowed, 'k');
+        if (count($keys) > 8) {
+            // pick 6 evenly spread actions
+            $pick = [];
+            for ($i=0; $i<6; $i++) {
+                $idx = (int)round($i * (count($keys)-1) / 5);
+                $pick[$keys[$idx]] = true;
+            }
+            $keys = array_keys($pick);
+        }
+        // fallback if ACIPS had none
+        if (empty($keys)) $keys = ['55:50','80:80','100:100'];
+
+        $actionPatternString = implode(', ', $keys);
 
         $finalPlan   = [];
         $stageCounter = 1;
@@ -450,13 +463,13 @@ class HVAC_Learning_Orchestrator extends IPSModule
             'stageName'    => sprintf("Stage %d: Coil Stress Test", $stageCounter++),
             'flapConfig'   => $allFlapsTrue,
             'targetOffset' => "-6.0",
-            'actionPattern'=> "100:90, 100:50, 100:30, 75:30, 75:90"
+            'actionPattern'=> "100:90, 100:50, 100:30, 75:30, 75:90" // keep explicit stress path
         ];
 
         $this->LogMessage('ORCH generateProposedPlan: plan created with '.count($finalPlan).' stages', KL_MESSAGE);
         return $finalPlan;
     }
-
+    
     private function generateFlapConfigString(array $all, array $active): string
     {
         $parts = [];
