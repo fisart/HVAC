@@ -517,6 +517,9 @@ class Zoning_and_Demand_Manager extends IPSModule
             'anyWindowOpen'  => $anyWindow,
             'activeRooms'    => $activeRooms
         ];
+        // expose ZDM emergency state (hard cutoff) to consumers (ACIPS/ORCH)
+        $agg['emergencyActive'] = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
+        
         $this->WriteAttributeString('LastAggregates', json_encode($agg));
         $this->log(3, 'agg_result', $agg);
 

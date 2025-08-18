@@ -673,6 +673,11 @@ class adaptive_HVAC_control extends IPSModule
 
     private function coilProtectionOk(): bool
     {
+        $agg = $this->fetchZDMAggregates();
+        if (is_array($agg) && !empty($agg['emergencyActive'])) {
+            $this->log(1, 'coil_emergency_from_zdm', ['coil' => $agg['coilTemp'] ?? null]);
+            return false;
+        }
         // 1) Emergency cutoff via linked variable (hard stop)
         $emergencyLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
         if ($emergencyLink > 0 && IPS_VariableExists($emergencyLink)) {
