@@ -403,8 +403,13 @@ class HVAC_Learning_Orchestrator extends IPSModule
                 $allowed[] = ['k'=>$a, 'p'=>$p, 'f'=>$f, 'load'=>$p+$f];
             }
         }
-        // sort by total load (ascending) for smooth ramps
-        usort($allowed, fn($A,$B) => $A['load'] <=> $B['load']);
+        // sort by total load, then power, then fan (smoother ramps)
+        usort($allowed, function($A, $B) {
+            if ($A['load'] !== $B['load']) return $A['load'] <=> $B['load'];
+            if ($A['p']    !== $B['p'])    return $A['p']    <=> $B['p'];
+            return $A['f'] <=> $B['f'];
+        });
+
 
         // choose a representative subset: low/mid/high, or use all if small
         $keys = array_column($allowed, 'k');
