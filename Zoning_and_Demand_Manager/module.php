@@ -431,34 +431,30 @@ class Zoning_and_Demand_Manager extends IPSModule
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
         $hmap = $this->getHystState(); // latched hysteresis states { roomName => bool }
 
-        // --- Kalibrierungsmodus erkennen (lazy + memory safe) ---
+        // NEW: accumulators for weighted metrics
+        $wDevSum = 0.0;   // Σ (dev * size) for hot rooms
+        $totSize = 0.0;   // Σ size for hot rooms
+        $hotRooms = 0;    // count(dev > threshold)
+        $maxDev   = 0.0;  // max positive (ist-soll)
+        $D_cold   = 0.0;  // max deficit below setpoint (positive magnitude)
+
+        // --- Kalibrierungsmodus/override detection (unchanged) ---
         $override  = GetValue($this->GetIDForIdent('OverrideActive'));
         $flapMap   = [];
         $calibMode = false;
-
-        if ($override) { // decode ONLY when override is active
+        if ($override) {
             $raw = $this->ReadAttributeString('LastOrchestratorFlaps') ?: '';
             if ($raw !== '' && $raw !== '[]') {
                 $tmp = json_decode($raw, true);
                 if (is_array($tmp)) {
-                    foreach ($tmp as $k => $v) {
-                        $flapMap[mb_strtolower(trim((string)$k))] = $this->toBool($v);
-                    }
+                    foreach ($tmp as $k => $v) { $flapMap[mb_strtolower(trim((string)$k))] = $this->toBool($v); }
                 }
-                unset($tmp); // free memory early
             }
             $calibMode = !empty($flapMap);
         }
 
-        // Keep DEBUG log tiny (no huge arrays)
-        $this->log(3, 'agg_start', [
-            'override'  => $override,
-            'calibMode' => $calibMode,
-            'flapCount' => count($flapMap)
-        ]);
-
         foreach ($rooms as $r) {
-            $name    = (string)($r['name'] ?? 'room');
+            $name = (string)($r['name'] ?? 'room');
             $nameKey = mb_strtolower(trim($name));
 
             $ist  = $this->GetFloat((int)($r['tempID'] ?? 0));
@@ -466,65 +462,78 @@ class Zoning_and_Demand_Manager extends IPSModule
             $win  = $this->isWindowOpenStable($r);
             $anyWindow = $anyWindow || $win;
 
-            $effectiveDemand = false;
+            // Safe reads for new fields
+            $size = (float)($r['size'] ?? 20.0);           // default 20 m²
+            if ($size < 1.0)  $size = 1.0;
+            if ($size > 300.) $size = 300.0;
+            $thr  = is_numeric($r['threshold'] ?? null) ? (float)$r['threshold'] : $hyst;
+            if ($thr < 0.0) $thr = 0.0; if ($thr > 5.0) $thr = 5.0;
 
+            // ---- Effective demand (existing behavior) ----
+            $effectiveDemand = false;
             if ($calibMode) {
-                // Im Kalibrierungsmodus nur den Plan verwenden
-                if (array_key_exists($nameKey, $flapMap)) {
-                    $effectiveDemand = $flapMap[$nameKey];
-                    // (avoid per-room debug spam with huge plans)
-                    // $this->log(3, 'agg_calib_demand', ['room' => $name, 'demand' => $effectiveDemand]);
-                } else {
-                    $this->log(1, 'agg_calib_room_not_in_plan', ['room' => $name]);
-                }
+                if (array_key_exists($nameKey, $flapMap)) $effectiveDemand = (bool)$flapMap[$nameKey];
             } else {
-                // Normale Logik
                 $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
                 if ($demVarID > 0 && IPS_VariableExists($demVarID)) {
                     $dem = (int)@GetValue($demVarID);
                     $effectiveDemand = ($dem === 2 || $dem === 3);
-                    $this->log(3, 'agg_demand_var', ['room' => $name, 'dem' => $dem, 'effectiveDemand' => $effectiveDemand]);
                 } elseif (array_key_exists($name, $hmap)) {
-                    // Verwende den gelatchten Hysterese-Zustand, falls vorhanden
                     $effectiveDemand = (bool)$hmap[$name];
-                    $this->log(3, 'agg_hyst_state_used', ['room' => $name, 'state' => $effectiveDemand]);
                 } elseif (is_finite($ist) && is_finite($soll)) {
-                    // Letzter Rückfall: einmalige Schwellenprüfung (ON-Schwelle)
                     $effectiveDemand = (($ist - $soll) >= $hyst);
-                    $this->log(3, 'agg_delta_fallback', ['room' => $name, 'ist' => $ist, 'soll' => $soll, 'eff' => $effectiveDemand]);
                 }
             }
-
-            // Fenster-offen blockiert immer
-            if ($win && $effectiveDemand) {
-                $effectiveDemand = false;
-                $this->log(2, 'agg_window_override', ['room' => $name]);
-            }
+            if ($win && $effectiveDemand) $effectiveDemand = false;
 
             if ($effectiveDemand) {
                 $numActive++;
                 $activeRooms[] = $name;
                 if (is_finite($ist) && is_finite($soll)) {
-                    $delta = abs($ist - $soll);
-                    $maxDeltaT = max($maxDeltaT, $delta);
+                    $maxDeltaT = max($maxDeltaT, abs($ist - $soll));
+                }
+            }
+
+            // ---- NEW: Weighted metrics from IST/SOLL (independent of demand) ----
+            if (is_finite($ist) && is_finite($soll)) {
+                $dev = $ist - $soll;            // + = above setpoint (needs cooling)
+                if ($dev > 0.0) $maxDev = max($maxDev, $dev);
+                if ($dev < 0.0) $D_cold = max($D_cold, -$dev);
+
+                if ($dev > $thr) {              // "hot" by per-room threshold
+                    $hotRooms++;
+                    $wDevSum += $dev * $size;
+                    $totSize += $size;
                 }
             }
         }
+
+        // Coil + emergency flags
+        $coilVarID = (int)$this->ReadPropertyInteger('CoilTemperatureLink');
+        $coilTemp  = $this->GetFloat($coilVarID);
+        $emergency = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
 
         $agg = [
             'numActiveRooms' => $numActive,
             'maxDeltaT'      => round($maxDeltaT, 2),
             'anyWindowOpen'  => $anyWindow,
-            'activeRooms'    => $activeRooms
+            'activeRooms'    => $activeRooms,
+
+            // NEW fields:
+            'rawWAD'         => ($totSize > 0.0) ? round($wDevSum / $totSize, 3) : 0.0,
+            'hotRooms'       => $hotRooms,
+            'maxDev'         => round($maxDev, 3),
+            'D_cold'         => round($D_cold, 3),
+            'coilTemp'       => is_finite($coilTemp) ? round($coilTemp, 2) : null,
+            'emergencyActive'=> $emergency
         ];
-        // expose ZDM emergency state (hard cutoff) to consumers (ACIPS/ORCH)
-        $agg['emergencyActive'] = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
 
         $this->WriteAttributeString('LastAggregates', json_encode($agg));
         $this->log(3, 'agg_result', $agg);
 
         return json_encode($agg);
     }
+
 
     // Returns a JSON string with the effective demand snapshot:
     // {
