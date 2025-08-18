@@ -33,7 +33,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyFloat('Gamma', 0.90);
         $this->RegisterPropertyFloat('DecayRate', 0.005);
 
-        $this->RegisterPropertyFloat('Hysteresis', 0.5);
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
 
@@ -439,27 +438,20 @@ class adaptive_HVAC_control extends IPSModule
 
     private function buildStateVector(): array
     {
-        // Take state directly from ZDM where available.
         $agg = $this->fetchZDMAggregates();
 
         $numActive = is_array($agg) ? (int)($agg['numActiveRooms'] ?? 0) : 0;
         $maxDelta  = is_array($agg) ? (float)($agg['maxDeltaT'] ?? 0.0)   : 0.0;
-        $coilAgg   = is_array($agg) && array_key_exists('coilTemp', $agg) ? $agg['coilTemp'] : null;
-        $anyWin    = is_array($agg) ? (bool)($agg['anyWindowOpen'] ?? false) : false;
-
-        // Coil fallback via local sensor if ZDM omitted it.
-        $agg = $this->fetchZDMAggregates();
-        $coil = (is_array($agg) && is_numeric($agg['coilTemp'] ?? null))
-        ? (float)$agg['coilTemp']
-        : null; // no fallback to property anymore
+        $coil      = (is_array($agg) && is_numeric($agg['coilTemp'] ?? null))
+                        ? (float)$agg['coilTemp'] : null;
 
         return [
             'numActiveRooms' => $numActive,
             'maxDelta'       => round($maxDelta, 2),
-            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null,
-            'anyWindowOpen'  => $anyWin
+            'coilTemp'       => is_numeric($coil) ? round($coil, 2) : null
         ];
     }
+
 
 
 
