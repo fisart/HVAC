@@ -106,35 +106,53 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
         if ($zoningID === 0 || $adaptiveID === 0) {
             $this->LogMessage("ORCH: Missing links – cannot start calibration (ZDM/ADAPT is 0).", KL_ERROR);
+            $this->SetStatus(202);
             return;
         }
 
-        // Set status and initialize calibration
+        // Ensure we have a non-empty plan (generate if needed)
+        $plan = $this->getCalibrationPlan();
+        if (empty($plan)) {
+            $this->LogMessage('ORCH: No plan found – generating a proposed plan now.', KL_WARNING);
+            $newPlan = $this->generateProposedPlan($zoningID, $adaptiveID);
+            if (!empty($newPlan)) {
+                IPS_SetProperty($this->InstanceID, 'CalibrationPlan', json_encode($newPlan, JSON_UNESCAPED_UNICODE));
+                if (IPS_HasChanges($this->InstanceID)) {
+                    IPS_ApplyChanges($this->InstanceID);
+                }
+                $this->SetValue('CalibrationPlanHTML', $this->GeneratePlanHTML($newPlan));
+                $plan = $this->getCalibrationPlan(); // reload structured
+            }
+        }
 
-        $this->uiSetCalStatus('Running');
-        $this->SetStatus(102); // keep healthy code
+        if (empty($plan)) {
+            $this->LogMessage('ORCH: Cannot start – calibration plan is still empty.', KL_ERROR);
+            $this->SetStatus(202);
+            return;
+        }
 
+        // Initialize calibration state
+        $this->WriteAttributeString('CalibrationStatus', 'Running');
         $this->WriteAttributeInteger('CurrentStageIndex', 0);
         $this->WriteAttributeInteger('CurrentActionIndex', 0);
-        $this->SetStatus(102);
+        $this->SetStatus(102); // keep green
         $this->LogMessage('--- ORCH: Starting System Calibration ---', KL_MESSAGE);
 
         // Start timer with ZDM interval
         $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
-        // Originalziele sichern (falls vorhanden)
+
+        // Save original targets (if available)
         if (method_exists($this, 'saveOriginalTargets')) {
             $this->saveOriginalTargets();
         }
 
-        // ZDM Override einschalten
+        // Enable ZDM override
         if (function_exists('ZDM_SetOverrideMode')) {
             $this->LogMessage("ORCH: Sending Override=true to ZDM instance {$zoningID}", KL_MESSAGE);
-            // before calling ZDM_SetOverrideMode(...)
             $overrideValue = true;
-            $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=" . ($overrideValue ? 'true' : 'false'), KL_MESSAGE);
+            $this->LogMessage("ORCH: DEBUG_ORCH_SEND_OVERRIDE target={$zoningID} value=true", KL_MESSAGE);
             ZDM_SetOverrideMode($zoningID, $overrideValue);
 
-            // Verifikation: OverrideActive in der ZDM-Instanz prüfen
             $vid = @IPS_GetObjectIDByIdent('OverrideActive', $zoningID);
             if ($vid) {
                 $val = (bool) @GetValue($vid);
@@ -146,7 +164,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
             $this->LogMessage('ORCH: ZDM_SetOverrideMode() not available', KL_ERROR);
         }
 
-        // Adaptive-Modus (optional, falls API vorhanden)
+        // Optional: set ACIPS mode
         if (function_exists('ACIPS_SetMode')) {
             ACIPS_SetMode($adaptiveID, 'orchestrated');
             $this->LogMessage('ORCH: ACIPS_SetMode(orchestrated) requested', KL_MESSAGE);
@@ -154,20 +172,14 @@ class HVAC_Learning_Orchestrator extends IPSModule
             $this->LogMessage('ORCH: ACIPS_SetMode() not available', KL_WARNING);
         }
 
-        // Hier deine bestehende Startlogik weiterlaufen lassen (Plan generieren, Timer/Step starten, etc.)
-        if (method_exists($this, 'ProposePlan')) {
-            // optional/sofern gewünscht: Plan neu erzeugen
-            // $this->ProposePlan();
-        }
-        if (method_exists($this, 'RunNextStep')) {
-            $this->RunNextStep();
-        }
+        // Kick first step
+        $this->RunNextStep();
 
-        // UI aktualisieren
         if (method_exists($this, 'ReloadForm')) {
             $this->ReloadForm();
         }
     }
+
 
    public function StopCalibration()
     {
@@ -249,33 +261,63 @@ class HVAC_Learning_Orchestrator extends IPSModule
 
     public function RunNextStep()
     {
+        // Only operate while running
         if ($this->ReadAttributeString('CalibrationStatus') !== 'Running') {
             $this->LogMessage('ORCH RunNextStep: ignored (status not Running)', KL_WARNING);
             return;
         }
 
-        // NEW: pause when ZDM reports emergency; do not advance indices
-        $zid = (int)$this->ReadPropertyInteger('ZoningManagerID');
-        if ($zid > 0 && function_exists('ZDM_GetAggregates')) {
-            $agg = @json_decode(@ZDM_GetAggregates($zid), true);
-            if (is_array($agg) && !empty($agg['emergencyActive'])) {
-                $this->LogMessage('ORCH RunNextStep: paused (ZDM emergencyActive)', KL_WARNING);
-                // keep showing Running, just wait for next tick
-                $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
-                return;
-            }
+        // Load and validate plan
+        $plan = $this->getCalibrationPlan();
+        if (!is_array($plan) || count($plan) === 0) {
+            $this->LogMessage('ORCH RunNextStep: empty or invalid plan → stopping.', KL_ERROR);
+            $this->StopCalibration();
+            return;
         }
 
-        // (optional, keeps label fresh while stepping)
-        $this->uiSetCalStatus('Running');
+        // Read indices (clamp to sane bounds)
+        $stageIdx  = max(0, (int)$this->ReadAttributeInteger('CurrentStageIndex'));
+        $actionIdx = max(0, (int)$this->ReadAttributeInteger('CurrentActionIndex'));
 
-        $currentStage = $plan[$stageIdx];
+        if ($stageIdx >= count($plan)) {
+            $this->LogMessage('--- ORCH: Calibration Plan Finished Successfully! ---', KL_MESSAGE);
+            $this->StopCalibration();
+            return;
+        }
 
+        $currentStage = $plan[$stageIdx] ?? null;
+        if (!is_array($currentStage)) {
+            $this->LogMessage("ORCH RunNextStep: stage {$stageIdx} invalid → skipping to next stage.", KL_WARNING);
+            $this->WriteAttributeInteger('CurrentStageIndex', $stageIdx + 1);
+            $this->WriteAttributeInteger('CurrentActionIndex', 0);
+            $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
+            return;
+        }
+
+        $actions = isset($currentStage['actions']) && is_array($currentStage['actions']) ? $currentStage['actions'] : [];
+        if (empty($actions)) {
+            $this->LogMessage("ORCH RunNextStep: stage {$stageIdx} has no actions → skipping to next stage.", KL_WARNING);
+            $this->WriteAttributeInteger('CurrentStageIndex', $stageIdx + 1);
+            $this->WriteAttributeInteger('CurrentActionIndex', 0);
+            $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
+            return;
+        }
+
+        // If we're beyond the last action of this stage, advance to next stage
+        if ($actionIdx >= count($actions)) {
+            $this->WriteAttributeInteger('CurrentStageIndex', $stageIdx + 1);
+            $this->WriteAttributeInteger('CurrentActionIndex', 0);
+            $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
+            return;
+        }
+
+        // Stage header logging + setup (only once per stage)
         if ($actionIdx === 0) {
+            $stageName = (string)($currentStage['name'] ?? 'Unnamed');
             $this->LogMessage(sprintf('--- ORCH: Starting Stage %d/%d: %s ---',
-                $stageIdx + 1, count($plan), (string)($currentStage['name'] ?? 'Unnamed')), KL_MESSAGE);
+                $stageIdx + 1, count($plan), $stageName), KL_MESSAGE);
 
-            // Convert list-of-objects to {"Room Name": bool}
+            // Convert flaps to {"Room": bool}
             $flapMap = [];
             foreach (($currentStage['setup']['flaps'] ?? []) as $f) {
                 if (isset($f['name'])) {
@@ -285,58 +327,58 @@ class HVAC_Learning_Orchestrator extends IPSModule
             $this->LogMessage('ORCH flapMap → ' . json_encode($flapMap, JSON_UNESCAPED_UNICODE), KL_MESSAGE);
 
             $zid = (int)$this->ReadPropertyInteger('ZoningManagerID');
-            if (function_exists('ZDM_CommandFlaps')) {
+            if ($zid > 0 && function_exists('ZDM_CommandFlaps')) {
                 ZDM_CommandFlaps(
                     $zid,
                     (string)($currentStage['name'] ?? 'calibration'),
                     json_encode($flapMap, JSON_UNESCAPED_UNICODE)
                 );
             } else {
-                $this->LogMessage('ORCH RunNextStep: ZDM_CommandFlaps() not available', KL_ERROR);
+                $this->LogMessage('ORCH RunNextStep: ZDM_CommandFlaps() not available or ZDM link missing', KL_ERROR);
             }
 
+            // Artificial targets for active rooms
             $this->setArtificialTargets($currentStage);
-            IPS_Sleep(5000); // allow flaps/targets to settle
+            IPS_Sleep(5000); // settle time
         }
 
-        $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
-        if (function_exists('ACIPS_ForceActionAndLearn')) {
-            $action = (string)($currentStage['actions'][$actionIdx] ?? '');
-            // Ensure physical AC/Fan relays follow the step action (ZDM handles the real outputs)
-            if ($action !== '' && strpos($action, ':') !== false) {
-                list($p, $f) = array_map('intval', explode(':', $action, 2));
-                $zid = (int)$this->ReadPropertyInteger('ZoningManagerID');
-                if ($zid > 0 && function_exists('ZDM_CommandSystem')) {
-                    @ZDM_CommandSystem($zid, $p, $f);
-                    $this->LogMessage(
-                        'ORCH: zdm_command_system ' . json_encode(['p'=>$p,'f'=>$f], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE),
-                        KL_MESSAGE
-                    );
-                } else {
-                    $this->LogMessage('ORCH: ZDM_CommandSystem() not available or ZDM link missing', KL_WARNING);
-                }
+        // Execute next action
+        $action = (string)($actions[$actionIdx] ?? '');
+        if ($action === '' || strpos($action, ':') === false) {
+            $this->LogMessage("ORCH RunNextStep: invalid action at {$stageIdx}:{$actionIdx} → skipping.", KL_WARNING);
+        } else {
+            // Reflect to ZDM outputs (so physical relays follow)
+            $zid = (int)$this->ReadPropertyInteger('ZoningManagerID');
+            if ($zid > 0 && function_exists('ZDM_CommandSystem')) {
+                [$p, $f] = array_map('intval', explode(':', $action, 2));
+                @ZDM_CommandSystem($zid, $p, $f);
+                $this->LogMessage('ORCH: zdm_command_system ' . json_encode(['p'=>$p,'f'=>$f], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE), KL_MESSAGE);
             }
 
-
-            $result = @json_decode(ACIPS_ForceActionAndLearn($adaptiveID, $action), true);
-            $this->LogMessage(
-                "ORCH Step {$stageIdx}:{$actionIdx} | Action: {$action} | Reward: " . number_format((float)($result['reward'] ?? 0), 2),
-                KL_DEBUG
-            );
-        } else {
-            $this->LogMessage('ORCH RunNextStep: ACIPS_ForceActionAndLearn() not available', KL_ERROR);
+            // Learning step in ACIPS
+            $adaptiveID = (int)$this->ReadPropertyInteger('AdaptiveControlID');
+            if ($adaptiveID > 0 && function_exists('ACIPS_ForceActionAndLearn')) {
+                $result = @json_decode(ACIPS_ForceActionAndLearn($adaptiveID, $action), true);
+                $this->LogMessage(
+                    "ORCH Step {$stageIdx}:{$actionIdx} | Action: {$action} | Reward: " .
+                    number_format((float)($result['reward'] ?? 0), 2),
+                    KL_DEBUG
+                );
+            } else {
+                $this->LogMessage('ORCH RunNextStep: ACIPS_ForceActionAndLearn() not available or Adaptive link missing', KL_ERROR);
+            }
         }
 
-        // advance indices
+        // Advance indices
         $actionIdx++;
-        if ($actionIdx >= count($currentStage['actions'])) {
+        if ($actionIdx >= count($actions)) {
             $this->WriteAttributeInteger('CurrentStageIndex', $stageIdx + 1);
             $this->WriteAttributeInteger('CurrentActionIndex', 0);
         } else {
             $this->WriteAttributeInteger('CurrentActionIndex', $actionIdx);
         }
-    
-        // Set next timer interval (always use ZDM interval)
+
+        // Schedule next tick using ZDM interval
         $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
     }
 
