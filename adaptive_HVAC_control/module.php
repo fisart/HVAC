@@ -34,7 +34,6 @@ class adaptive_HVAC_control extends IPSModule
 
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
-        $this->RegisterPropertyInteger('TimerInterval', 60);
 
         // Actions/Granularity
         $this->RegisterPropertyString('CustomPowerLevels', '0,40,80,100');
@@ -105,7 +104,6 @@ class adaptive_HVAC_control extends IPSModule
 
         $this->SetStatus(102);
         // ZDM is master → disable internal timer
-        $this->SetTimerInterval('LearningTimer', 0);
 
         if ((float)$this->ReadAttributeFloat('Epsilon') <= 0.0) {
             $this->initExploration();
@@ -1192,9 +1190,25 @@ private function computeRoomMetrics(): array
     {
         $now  = time();
         $prev = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-        $last = (is_array($prev) && isset($prev['ts'])) ? (int)$prev['ts'] : ($now - max(60, (int)$this->ReadPropertyInteger('TimerInterval')));
-        return max(1, $now - $last) / 60.0;
+
+        if (is_array($prev) && isset($prev['ts']) && is_numeric($prev['ts'])) {
+            $last = (int)$prev['ts'];
+        } else {
+            // No previous timestamp → fall back to the ZDM tick interval
+            $intervalSec = 60; // safe default
+            $zdmID = (int)$this->ReadPropertyInteger('ZDM_InstanceID');
+            if ($zdmID > 0 && IPS_InstanceExists($zdmID)) {
+                try {
+                    $ival = (int)IPS_GetProperty($zdmID, 'TimerInterval'); // seconds
+                    if ($ival > 0) $intervalSec = $ival;
+                } catch (\Throwable $e) { /* ignore, keep default */ }
+            }
+            $last = $now - $intervalSec;
+        }
+
+        return max(1, $now - $last) / 60.0; // minutes, with a 1s minimum
     }
+
 
     private function binT(?float $coil, ?float $prevCoil): int
     {
