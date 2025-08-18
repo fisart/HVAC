@@ -74,6 +74,10 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // ---- Timer ----
         $this->RegisterTimer('ZDM_Timer', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
+
+        // ------ Trigger -------
+        $this->RegisterAttributeString('DemandWatchIDs', '[]');
+
     }
 
     public function ApplyChanges()
@@ -96,7 +100,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $intervalMs = max(1, (int)$this->ReadPropertyInteger('TimerInterval')) * 1000;
         $this->SetTimerInterval('ZDM_Timer', $intervalMs);
-
+        $this->setupDemandTriggers();
         $this->log(2, 'apply_changes', [
             'interval_s' => (int)$this->ReadPropertyInteger('TimerInterval'),
             'hyst'       => (float)$this->ReadPropertyFloat('Hysteresis')
@@ -117,8 +121,9 @@ class Zoning_and_Demand_Manager extends IPSModule
             return;
         }
 
-        // React immediately when the external Standalone link changes (if configured)
+        // React immediately when selected variables change
         if ($Message === VM_UPDATE) {
+            // 1) Standalone mode link changed → re-evaluate immediately
             $link = (int)$this->ReadPropertyInteger('StandaloneModeLink'); // requires property from Create()
             if ($link > 0 && $SenderID === $link) {
                 $this->log(2, 'standalone_link_update', ['val' => @GetValue($SenderID)]);
@@ -127,8 +132,21 @@ class Zoning_and_Demand_Manager extends IPSModule
                 try { $this->ReloadForm(); } catch (\Throwable $e) {}
                 return;
             }
+
+            // 2) Any room demand variable changed → run zoning now (no timer wait)
+            //    DemandWatchIDs is maintained by setupDemandTriggers()
+            $watch = json_decode($this->ReadAttributeString('DemandWatchIDs') ?: '[]', true);
+            if (is_array($watch) && in_array($SenderID, $watch, true)) {
+                $this->log(2, 'demand_var_update_trigger', [
+                    'varID'  => $SenderID,
+                    'newVal' => @GetValue($SenderID)
+                ]);
+                $this->ProcessZoning(); // immediate start/stop without waiting for timer
+                return;
+            }
         }
     }
+
 
 
     public function ProcessZoning(): void
@@ -613,6 +631,45 @@ class Zoning_and_Demand_Manager extends IPSModule
         return $t;
     }
 
+    private function setupDemandTriggers(): void
+    {
+        // Unregister old watchers
+        $prev = json_decode($this->ReadAttributeString('DemandWatchIDs') ?: '[]', true);
+        if (is_array($prev)) {
+            foreach ($prev as $id) {
+                if (is_int($id) && $id > 0) {
+                    $this->UnregisterMessage($id, VM_UPDATE);
+                }
+            }
+        }
+
+        // Collect demand variable IDs from rooms
+        $watch = [];
+        foreach ($this->getRooms() as $r) {
+            foreach (['demandID','bedarfsausgabeID','bedarfID'] as $key) {
+                $vid = (int)($r[$key] ?? 0);
+                if ($vid > 0 && IPS_VariableExists($vid)) {
+                    $watch[$vid] = true; // de-dup
+                }
+            }
+        }
+
+        // Register watchers
+        $ids = array_keys($watch);
+        foreach ($ids as $vid) {
+            $this->RegisterMessage($vid, VM_UPDATE);
+        }
+
+        // Persist the current set
+        $this->WriteAttributeString('DemandWatchIDs', json_encode($ids));
+        $this->log(2, 'armed_demand_triggers', ['count' => count($ids)]);
+    }
+
+    private function isDemandWatchID(int $id): bool
+    {
+        $list = json_decode($this->ReadAttributeString('DemandWatchIDs') ?: '[]', true);
+        return is_array($list) && in_array($id, $list, true);
+    }
 
 
     // ---------- Intern: Flaps/System ----------
