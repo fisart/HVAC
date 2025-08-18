@@ -240,9 +240,9 @@ class adaptive_HVAC_control extends IPSModule
             $this->log(3, 'state_N_from_ZDM', ['N' => (int)($state['numActiveRooms'] ?? -1)]);
 
             $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-            $prevCoil = (is_array($prevMeta) && isset($prevMeta['coilRaw']))
-                ? (float)$prevMeta['coilRaw']
-                : ($state['coilRaw'] ?? null);
+            $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
+                ? (float)$prevMeta['coil']
+                : ($state['coilTemp'] ?? null);
 
 
             // Compute readable/bucket key (no md5)
@@ -285,7 +285,7 @@ class adaptive_HVAC_control extends IPSModule
                 'stateKey' => $sKeyNew,              // << use bucketed key here
                 'action'   => $p . ':' . $f,
                 'wad'      => $metrics['rawWAD'] ?? 0.0,
-                'coilRaw'  => $metrics['coilRaw'],
+                'coil'    => ($metrics['coilTemp'] ?? null),
                 'maxDelta' => $state['maxDelta'],
                 'ts'       => time()
             ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
@@ -302,8 +302,8 @@ class adaptive_HVAC_control extends IPSModule
         // Block forced actions during ZDM emergency to preserve emergency fan
         $agg0 = $this->fetchZDMAggregates();
         if (is_array($agg0) && !empty($agg0['emergencyActive'])) {
-            $this->log(1, 'force_blocked_emergency_from_zdm', ['pair'=>$pair,'coil'=>$agg0['coilTemp'] ?? null]);
-            return json_encode(['ok'=>false, 'err'=>'emergency_active']);
+            $this->log(1, 'skip_tick_emergency_from_zdm', ['coil'=>$agg0['coilTemp'] ?? null]);
+            return;
         }
         // Demand & safety gates
         if (!$this->hasZdmCoolingDemand()) {
@@ -332,9 +332,9 @@ class adaptive_HVAC_control extends IPSModule
         $this->log(3, 'state_N_from_ZDM', ['N' => (int)($state['numActiveRooms'] ?? -1)]);
 
         $prevMeta = json_decode($this->GetBuffer('MetaData') ?: '[]', true);
-        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coilRaw']))
-            ? (float)$prevMeta['coilRaw']
-            : ($state['coilRaw'] ?? null);
+        $prevCoil = (is_array($prevMeta) && isset($prevMeta['coil']))
+            ? (float)$prevMeta['coil']
+            : ($state['coilTemp'] ?? null);
 
         $sKeyNew  = $this->stateKeyBuckets($state, is_numeric($prevCoil) ? (float)$prevCoil : null);
         $this->rememberStateLabel($sKeyNew, $label);
@@ -358,7 +358,7 @@ class adaptive_HVAC_control extends IPSModule
             'stateKey' => $sKeyNew,              // << use bucketed key here
             'action'   => $p . ':' . $f,
             'wad'      => $metrics['rawWAD'] ?? 0.0,
-            'coilRaw'  => $metrics['coilRaw'],
+            'coil'     => ($metrics['coilTemp'] ?? null),
             'maxDelta' => $state['maxDelta'],
             'ts'       => time()
         ], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
@@ -1255,7 +1255,7 @@ private function computeRoomMetrics(): array
         $n = $this->binN((int)($raw['numActiveRooms'] ?? 0));
         $d = $this->binD((float)($raw['maxDelta'] ?? 0.0));
         $c = $this->binC(($raw['coilTemp'] ?? null), (float)$this->ReadPropertyFloat('MinCoilTempLearning'));
-        $t = $this->binT(($raw['coilRaw'] ?? null), $prevCoil);
+        $t = $this->binT(($raw['coilTemp'] ?? null), $prevCoil);
         return "N{$n}|D{$d}|C{$c}|T{$t}";
     }
 
