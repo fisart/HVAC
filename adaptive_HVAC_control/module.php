@@ -79,7 +79,6 @@ class adaptive_HVAC_control extends IPSModule
 
         // Coil-Safety
         $this->RegisterPropertyFloat('MinCoilTempLearning', 2.0);     // °C
-        $this->RegisterPropertyInteger('EmergencyCoilTempLink', 0);   // emergency cutoff variable link
         $this->RegisterPropertyFloat('MaxCoilDropRate', 1.5);         // K/min
         $this->RegisterPropertyBoolean('AbortOnCoilFreeze', true);
 
@@ -689,15 +688,6 @@ class adaptive_HVAC_control extends IPSModule
         if (is_array($agg) && !empty($agg['emergencyActive'])) {
             $this->log(1, 'coil_emergency_from_zdm', ['coil' => $agg['coilTemp'] ?? null]);
             return false;
-        }
-        // 1) Emergency cutoff via linked variable (hard stop)
-        $emergencyLink = (int)$this->ReadPropertyInteger('EmergencyCoilTempLink');
-        if ($emergencyLink > 0 && IPS_VariableExists($emergencyLink)) {
-            $emergencyTemp = @GetValue($emergencyLink);
-            if (is_numeric($emergencyTemp) && $emergencyTemp <= 0.0) {
-                $this->log(0, 'coil_emergency_cutoff', ['temp' => (float)$emergencyTemp]);
-                return false;
-            }
         }
 
         // 2) Learning coil freeze protection (soft limit)

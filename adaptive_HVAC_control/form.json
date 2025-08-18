@@ -50,7 +50,6 @@
 
     { "type": "Label", "label": "--- Coil Safety ---" },
     { "type": "NumberSpinner", "name": "MinCoilTempLearning", "caption": "Min Coil Temp (Learning, °C)", "digits": 1, "minimum": -5.0, "maximum": 10.0, "value": 2.0 },
-    { "type": "SelectVariable", "name": "EmergencyCoilTempLink", "caption": "Emergency Coil Temp Link" },
     { "type": "NumberSpinner", "name": "MaxCoilDropRate", "caption": "Max coil drop rate (K/min)", "digits": 2, "minimum": 0.0, "maximum": 10.0, "value": 1.5 },
     { "type": "CheckBox", "name": "AbortOnCoilFreeze", "caption": "Abort on coil freeze indicators", "value": true },
 
