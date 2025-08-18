@@ -437,79 +437,52 @@ class adaptive_HVAC_control extends IPSModule
 
     private function buildStateVector(): array
     {
-        // SSOT for N
-        $n = $this->getNFromZDM();
-
-        // maxDelta: prefer ZDM aggregate; fallback to local
+        // Take state directly from ZDM where available.
         $agg = $this->fetchZDMAggregates();
-        $maxDelta = 0.0;
-        if (is_array($agg) && isset($agg['maxDeltaT'])) {
-            $maxDelta = (float)$agg['maxDeltaT'];
-        } else {
-            $rooms = $this->getRooms();
-            $hyst  = (float)$this->ReadPropertyFloat('Hysteresis'); // keep ≥0.15°C
-            foreach ($rooms as $r) {
-                $ist  = $this->getFloat((int)($r['tempID'] ?? 0));
-                $soll = $this->getFloat((int)($r['targetID'] ?? 0));
-                if (is_finite($ist) && is_finite($soll)) {
-                    $d = $ist - $soll;
-                    if ($d > $hyst) $maxDelta = max($maxDelta, $d);
-                }
-            }
-        }
 
-        // Coil (raw + cosmetic rounded)
-        $coilRaw = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
-        $coil    = is_finite($coilRaw) ? (float)$coilRaw : NAN;
+        $numActive = is_array($agg) ? (int)($agg['numActiveRooms'] ?? 0) : 0;
+        $maxDelta  = is_array($agg) ? (float)($agg['maxDeltaT'] ?? 0.0)   : 0.0;
+        $coilAgg   = is_array($agg) && array_key_exists('coilTemp', $agg) ? $agg['coilTemp'] : null;
+        $anyWin    = is_array($agg) ? (bool)($agg['anyWindowOpen'] ?? false) : false;
+
+        // Coil fallback via local sensor if ZDM omitted it.
+        $coil = (is_numeric($coilAgg)) ? (float)$coilAgg
+               : $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
 
         return [
-            'numActiveRooms' => max(0, (int)$n),
-            'maxDelta'       => round((float)$maxDelta, 2),
-            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null,  // for UI/labels
-            'coilRaw'        => is_finite($coil) ? $coil : null             // for trend
+            'numActiveRooms' => $numActive,
+            'maxDelta'       => round($maxDelta, 2),
+            'coilTemp'       => is_finite($coil) ? round($coil, 2) : null,
+            'anyWindowOpen'  => $anyWin
         ];
     }
 
 
 
-
-    private function computeRoomMetrics(): array
+private function computeRoomMetrics(): array
     {
-        $rooms = $this->getRooms();
-        $wDevSum = 0.0; $totalSize = 0.0; $D_cold = 0.0; $hotRooms = 0; $maxDev = 0.0;
+        // Prefer ZDM aggregates (SSOT). Fall back safely if fields are missing.
+        $agg = $this->fetchZDMAggregates();
 
-        foreach ($rooms as $r) {
-            $tid = (int)($r['tempID'] ?? 0);
-            $sid = (int)($r['targetID'] ?? 0);
-            if ($tid <= 0 || $sid <= 0 || !IPS_VariableExists($tid) || !IPS_VariableExists($sid)) continue;
+        $rawWAD   = is_array($agg) && array_key_exists('rawWAD', $agg)       ? (float)$agg['rawWAD']       : 0.0;
+        $hotRooms = is_array($agg) && array_key_exists('hotRooms', $agg)     ? (int)$agg['hotRooms']       : (int)($agg['numActiveRooms'] ?? 0);
+        $maxDev   = is_array($agg) && array_key_exists('maxDev', $agg)       ? (float)$agg['maxDev']       : (float)($agg['maxDeltaT'] ?? 0.0);
+        $D_cold   = is_array($agg) && array_key_exists('D_cold', $agg)       ? (float)$agg['D_cold']       : 0.0;
+        $coilAgg  = is_array($agg) && array_key_exists('coilTemp', $agg)     ? $agg['coilTemp']            : null;
 
-            $ist  = (float)@GetValue($tid);
-            $soll = (float)@GetValue($sid);
-            $dev  = $ist - $soll;
-
-            if ($dev > 0)  $maxDev = max($maxDev, $dev);
-            if ($dev < 0)  $D_cold = max($D_cold, -$dev);
-
-            $th = (float)($r['threshold'] ?? 0.5);
-            if ($dev > $th) {
-                $hotRooms++;
-                $wDevSum   += $dev * (float)($r['size'] ?? 10.0);
-                $totalSize += (float)($r['size'] ?? 10.0);
-            }
-        }
-        $rawWAD = ($totalSize > 0.0) ? ($wDevSum / $totalSize) : 0.0;
-
-        $coil = $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
+        // Coil fallback: use local CoilTempLink only if ZDM didn't provide one.
+        $coil = (is_numeric($coilAgg)) ? (float)$coilAgg
+               : $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
 
         return [
-            'rawWAD'   => round($rawWAD, 3),
-            'hotRooms' => $hotRooms,
-            'maxDev'   => round($maxDev, 3),
-            'D_cold'   => round($D_cold, 3),
-            'coilTemp' => is_finite($coil) ? round($coil, 3) : null, // cosmetic
-            'coilRaw'  => is_finite($coil) ? (float)$coil : null     // used for trend
+            'rawWAD'   => round((float)$rawWAD, 3),
+            'hotRooms' => (int)$hotRooms,
+            'maxDev'   => round((float)$maxDev, 3),
+            'D_cold'   => round((float)$D_cold, 3),
+            'coilTemp' => is_finite($coil) ? round((float)$coil, 3) : null
         ];
     }
+
 
     private function calculateReward(array $state, array $action, ?array $metrics = null, ?array $prevMeta = null): float
     {
