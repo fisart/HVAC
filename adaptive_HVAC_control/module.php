@@ -36,7 +36,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
 
-        $this->RegisterPropertyInteger('ACActiveLink', 0);
         $this->RegisterPropertyInteger('PowerOutputLink', 0); // kept for legacy; not used directly
         $this->RegisterPropertyInteger('FanOutputLink', 0);   // kept for legacy; not used directly
         $this->RegisterPropertyInteger('TimerInterval', 60);
@@ -195,8 +194,7 @@ class adaptive_HVAC_control extends IPSModule
         try {
             $this->log(3, 'process_learning_start', [
                 'PowerOutputLink' => $this->ReadPropertyInteger('PowerOutputLink'),
-                'FanOutputLink'   => $this->ReadPropertyInteger('FanOutputLink'),
-                'ACActiveLink'    => $this->ReadPropertyInteger('ACActiveLink')
+                'FanOutputLink'   => $this->ReadPropertyInteger('FanOutputLink')
             ]);
            // Respect ZDM hard emergency immediately (do not send 0:0)
             $agg0 = $this->fetchZDMAggregates();
@@ -208,13 +206,6 @@ class adaptive_HVAC_control extends IPSModule
             // Manual override disables learning/action
             if ($this->ReadPropertyBoolean('ManualOverride')) {
                 $this->log(2, 'manual_override_active');
-                return;
-            }
-
-            // AC inactive → ensure outputs are off
-            if (!$this->isTruthyVar($this->ReadPropertyInteger('ACActiveLink'))) {
-                $this->applyAction(0, 0);
-                $this->log(3, 'ac_inactive_skip');
                 return;
             }
 
