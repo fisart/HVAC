@@ -17,21 +17,6 @@
     { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
     { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
 
-    { "type": "Label", "label": "--- Monitored Rooms ---" },
-    {
-      "type": "List",
-      "name": "MonitoredRooms",
-      "caption": "Monitored Rooms",
-      "add": true,
-      "delete": true,
-      "columns": [
-        { "caption": "Room Name", "name": "name", "width": "150px", "add": "New Room", "edit": { "type": "ValidationTextBox" } },
-        { "caption": "Temp Sensor (IST)", "name": "tempID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-        { "caption": "Target Temp (SOLL)", "name": "targetID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-        { "caption": "Room Size (m²)", "name": "size", "width": "100px", "add": 20, "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 200 } },
-        { "caption": "Threshold (°C)", "name": "threshold", "width": "100px", "add": 0.5, "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0.0, "maximum": 5.0 } }
-      ]
-    },
 
     { "type": "Label", "label": "--- Learning / Exploration ---" },
     { "type": "NumberSpinner", "name": "EpsilonStart", "caption": "Epsilon start", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.40 },

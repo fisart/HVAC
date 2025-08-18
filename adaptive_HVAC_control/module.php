@@ -58,9 +58,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterAttributeFloat('CoilNoisePerMin', 0.0); // from calibration (e.g. 0.00825)
         $this->RegisterAttributeInteger('LastTrendBin', 0);    // -1/0/+1 hysteresis memory
 
-
-        // Rooms
-        $this->RegisterPropertyString('MonitoredRooms', '[]');
         // Weights
         $this->RegisterPropertyFloat('W_Comfort', 1.0);
         $this->RegisterPropertyFloat('W_Energy', 0.01);
@@ -1027,12 +1024,6 @@ class adaptive_HVAC_control extends IPSModule
         return array_keys($out);
     }
 
-    private function getRooms(): array
-    {
-        $json = $this->ReadPropertyString('MonitoredRooms') ?: '[]';
-        $arr  = json_decode($json, true);
-        return is_array($arr) ? $arr : [];
-    }
 
     private function roomWindowOpen(array $room): bool
     {
