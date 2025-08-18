@@ -578,14 +578,21 @@ class adaptive_HVAC_control extends IPSModule
 
         // Debug (optional): visible only at LogLevel>=3
         $this->log(3, 'r_parts', [
-            'dtm'=>$dtm,
-            'Δ'=>$state['maxDelta']??null,
-            'p'=>$action['p']??null, 'f'=>$action['f']??null,
-            'comfort'=>$comfort, 'energy'=>$energy, 'penalty'=>$penalty,
-            'progress'=>$progress, 'freeze'=>$freeze, 'trend'=>$trend,
-            'sum'=>$comfort+$energy+$penalty+$progress+$freeze+$trend
-
+            'dtm'      => $dtm,
+            'Δ'        => $state['maxDelta'] ?? null,
+            'p'        => $action['p'] ?? null,
+            'f'        => $action['f'] ?? null,
+            'comfort'  => $comfort,
+            'energy'   => $energy,
+            'penalty'  => $penalty,
+            'progress' => $progress,
+            'freeze'   => $freeze,
+            'trend'    => $trend,
+            'wadPrev'  => $prevMeta['wad']        ?? null,   // << add
+            'wadNow'   => $metrics['rawWAD']      ?? null,   // << add
+            'sum'      => $comfort+$energy+$penalty+$progress+$freeze+$trend
         ]);
+
 
         return (float)round($r, 4);
     }
