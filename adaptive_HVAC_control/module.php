@@ -54,7 +54,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyFloat('FanWeight',0.25);  // relative weight of fan vs compressor
 
         // Sensors
-        $this->RegisterPropertyInteger('CoilTempLink', 0);
         $this->RegisterAttributeFloat('CoilNoisePerMin', 0.0); // from calibration (e.g. 0.00825)
         $this->RegisterAttributeInteger('LastTrendBin', 0);    // -1/0/+1 hysteresis memory
 
@@ -449,8 +448,10 @@ class adaptive_HVAC_control extends IPSModule
         $anyWin    = is_array($agg) ? (bool)($agg['anyWindowOpen'] ?? false) : false;
 
         // Coil fallback via local sensor if ZDM omitted it.
-        $coil = (is_numeric($coilAgg)) ? (float)$coilAgg
-               : $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
+        $agg = $this->fetchZDMAggregates();
+        $coil = (is_array($agg) && is_numeric($agg['coilTemp'] ?? null))
+        ? (float)$agg['coilTemp']
+        : null; // no fallback to property anymore
 
         return [
             'numActiveRooms' => $numActive,
@@ -473,17 +474,17 @@ private function computeRoomMetrics(): array
         $D_cold   = is_array($agg) && array_key_exists('D_cold', $agg)       ? (float)$agg['D_cold']       : 0.0;
         $coilAgg  = is_array($agg) && array_key_exists('coilTemp', $agg)     ? $agg['coilTemp']            : null;
 
-        // Coil fallback: use local CoilTempLink only if ZDM didn't provide one.
-        $coil = (is_numeric($coilAgg)) ? (float)$coilAgg
-               : $this->getFloat($this->ReadPropertyInteger('CoilTempLink'));
-
+        
+        $agg = $this->fetchZDMAggregates();
+        $coil = (is_array($agg) && is_numeric($agg['coilTemp'] ?? null)) ? (float)$agg['coilTemp'] : null;
         return [
-            'rawWAD'   => round((float)$rawWAD, 3),
-            'hotRooms' => (int)$hotRooms,
-            'maxDev'   => round((float)$maxDev, 3),
-            'D_cold'   => round((float)$D_cold, 3),
-            'coilTemp' => is_finite($coil) ? round((float)$coil, 3) : null
+        'rawWAD'   => (float)($agg['rawWAD']  ?? 0.0),
+        'hotRooms' => (int)  ($agg['hotRooms']?? 0),
+        'maxDev'   => (float)($agg['maxDev']  ?? 0.0),
+        'D_cold'   => (float)($agg['D_cold']  ?? 0.0),
+        'coilTemp' => $coil
         ];
+
     }
 
 
@@ -657,36 +658,38 @@ private function computeRoomMetrics(): array
 
     private function coilProtectionOk(): bool
     {
+        // 1) Emergency cutoff from ZDM → hard stop
         $agg = $this->fetchZDMAggregates();
         if (is_array($agg) && !empty($agg['emergencyActive'])) {
             $this->log(1, 'coil_emergency_from_zdm', ['coil' => $agg['coilTemp'] ?? null]);
             return false;
         }
 
-        // 2) Learning coil freeze protection (soft limit)
-        if (!$this->ReadPropertyBoolean('AbortOnCoilFreeze')) return true;
+        // 2) Optional learning freeze protection (soft gate) based on ZDM coil
+        if (!$this->ReadPropertyBoolean('AbortOnCoilFreeze')) {
+            return true;
+        }
 
-        $coilLink = (int)$this->ReadPropertyInteger('CoilTempLink');
-        if ($coilLink <= 0 || !IPS_VariableExists($coilLink)) return true;
+        $coil = (is_array($agg) && is_numeric($agg['coilTemp'] ?? null)) ? (float)$agg['coilTemp'] : null;
+        if (!is_numeric($coil)) {
+            // No coil info available → don't block learning
+            return true;
+        }
 
-        $coil = @GetValue($coilLink);
-        if (!is_numeric($coil)) return true;
-
-        $coil = (float)$coil;
         $minLearning = (float)$this->ReadPropertyFloat('MinCoilTempLearning');
         if ($coil <= $minLearning) {
             $this->log(1, 'coil_below_learning_min', ['coil' => $coil, 'min' => $minLearning]);
             return false;
         }
 
-        // 3) Drop rate protection
+        // 3) Drop-rate watchdog (uses ZDM coil)
         $now  = time();
         $key  = 'coil_last';
         $last = $this->GetBuffer($key);
         if ($last) {
             $obj = json_decode($last, true);
-            if (isset($obj['t'],$obj['v']) && is_numeric($obj['t']) && is_numeric($obj['v'])) {
-                $dt = max(1, $now - (int)$obj['t']);
+            if (isset($obj['t'], $obj['v']) && is_numeric($obj['t']) && is_numeric($obj['v'])) {
+                $dt   = max(1, $now - (int)$obj['t']);
                 $rate = ((float)$obj['v'] - $coil) * 60.0 / $dt; // positive = falling
                 $maxDrop = (float)$this->ReadPropertyFloat('MaxCoilDropRate');
                 if ($rate > $maxDrop) {
@@ -699,6 +702,7 @@ private function computeRoomMetrics(): array
 
         return true;
     }
+
 
     // -------------------- Epsilon --------------------
 

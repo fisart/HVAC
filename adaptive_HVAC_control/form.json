@@ -15,9 +15,8 @@
 
     { "type": "Label", "label": "--- Core Module Links ---" },
     { "type": "SelectVariable", "name": "ACActiveLink", "caption": "AC Active Link" },
-    { "type": "SelectVariable", "name": "CoilTempLink", "caption": "Coil Temperature Link" },
 
-
+    
     { "type": "Label", "label": "--- Learning / Exploration ---" },
     { "type": "NumberSpinner", "name": "EpsilonStart", "caption": "Epsilon start", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.40 },
     { "type": "NumberSpinner", "name": "EpsilonMin", "caption": "Epsilon min", "digits": 3, "minimum": 0.0, "maximum": 1.0, "value": 0.05 },
