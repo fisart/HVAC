@@ -36,7 +36,6 @@ class adaptive_HVAC_control extends IPSModule
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
 
-        $this->RegisterPropertyInteger('PowerOutputLink', 0); // kept for legacy; not used directly
         $this->RegisterPropertyInteger('FanOutputLink', 0);   // kept for legacy; not used directly
         $this->RegisterPropertyInteger('TimerInterval', 60);
 
@@ -158,10 +157,8 @@ class adaptive_HVAC_control extends IPSModule
     /** Manual property read helper */
     public function TestReadMyProperties()
     {
-        $powerID = $this->ReadPropertyInteger('PowerOutputLink');
         $fanID = $this->ReadPropertyInteger('FanOutputLink');
         $this->log(2, 'MANUAL_PROPERTY_TEST', [
-            'PowerOutputLink_Read' => $powerID,
             'FanOutputLink_Read' => $fanID
         ]);
     }
@@ -193,8 +190,8 @@ class adaptive_HVAC_control extends IPSModule
         }
         try {
             $this->log(3, 'process_learning_start', [
-                'PowerOutputLink' => $this->ReadPropertyInteger('PowerOutputLink'),
-                'FanOutputLink'   => $this->ReadPropertyInteger('FanOutputLink')
+                'FanOutputLink'   => $this->ReadPropertyInteger('FanOutputLink'),
+                'ZDM_InstanceID'  => $this->ReadPropertyInteger('ZDM_InstanceID')
             ]);
            // Respect ZDM hard emergency immediately (do not send 0:0)
             $agg0 = $this->fetchZDMAggregates();
