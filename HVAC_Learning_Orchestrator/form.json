@@ -1,76 +1,83 @@
 {
-    "elements": [
-        { "type": "Label", "label": "This module orchestrates advanced, automated learning routines for the HVAC system." },
-        { "type": "Label", "label": " " },
-        { "type": "Label", "label": "--- Core Module Links ---" },
+  "elements": [
+    { "type": "Label", "label": "This module orchestrates advanced, automated learning routines for the HVAC system." },
+    { "type": "Label", "label": " " },
+
+    { "type": "Label", "label": "--- Core Module Links ---" },
+    {
+      "type": "SelectInstance",
+      "name": "ZoningManagerID",
+      "caption": "Link to Zoning & Demand Manager",
+      "required": true
+    },
+    {
+      "type": "SelectInstance",
+      "name": "AdaptiveControlID",
+      "caption": "Link to Adaptive HVAC Control",
+      "required": true
+    },
+
+    { "type": "Label", "label": " " },
+    { "type": "Label", "label": "--- Automated Calibration Plan ---" },
+
+    {
+      "type": "Button",
+      "label": "Generate Proposed Plan",
+      "caption": "Generate Proposed Plan",
+      "onClick": "ORCH_ProposePlan($id);"
+    },
+
+    {
+      "type": "List",
+      "name": "CalibrationPlan",
+      "caption": "Calibration Plan",
+      "add": true,
+      "delete": true,
+      "sort": { "column": "stageName", "direction": "ascending" },
+      "columns": [
         {
-            "type": "SelectInstance",
-            "name": "ZoningManagerID",
-            "caption": "Link to Zoning & Demand Manager",
-            "required": true
+          "caption": "Stage Name",
+          "name": "stageName",
+          "width": "250px",
+          "add": "New Stage",
+          "edit": { "type": "ValidationTextBox" }
         },
         {
-            "type": "SelectInstance",
-            "name": "AdaptiveControlID",
-            "caption": "Link to Adaptive HVAC Control",
-            "required": true
-        },
-        { "type": "Label", "label": " "},
-        { "type": "Label", "label": "--- Automated Calibration Plan ---" },
-        {
-            "type": "Button",
-            "label": "Generate Proposed Plan",
-            "caption": "Generate Proposed Plan",
-            "onClick": "ORCH_ProposePlan($id);"
+          "caption": "Flap Config",
+          "name": "flapConfig",
+          "width": "300px",
+          "add": "Living Room=true, Kitchen=false",
+          "info": "Comma-separated RoomName=true/false",
+          "edit": { "type": "ValidationTextBox" }
         },
         {
-            "type": "List",
-            "name": "CalibrationPlan",
-            "caption": "Calibration Plan",
-            "add": true,
-            "delete": true,
-            "sort": { "column": "stageName", "direction": "ascending" },
-            "columns": [
-                {
-                    "caption": "Stage Name",
-                    "name": "stageName",
-                    "width": "250px",
-                    "add": "New Stage",
-                    "edit": { "type": "ValidationTextBox" }
-                },
-                {
-                    "caption": "Flap Config",
-                    "name": "flapConfig",
-                    "width": "300px",
-                    "add": "Living Room=true, Kitchen=false",
-                    "info": "Comma-separated RoomName=true/false",
-                    "edit": { "type": "ValidationTextBox" }
-                },
-                {
-                    "caption": "Target Temp Offset (°C)",
-                    "name": "targetOffset",
-                    "width": "150px",
-                    "add": "-5.0",
-                    "edit": { "type": "NumberSpinner", "digits": 1 }
-                },
-                {
-                    "caption": "Action Pattern",
-                    "name": "actionPattern",
-                    "width": "auto",
-                    "add": "30:30, 55:60, 75:90, 100:100",
-                    "edit": { "type": "ValidationTextBox" }
-                }
-            ]
+          "caption": "Target Temp Offset (°C)",
+          "name": "targetOffset",
+          "width": "150px",
+          "add": "-5.0",
+          "edit": { "type": "NumberSpinner", "digits": 1 }
+        },
+        {
+          "caption": "Action Pattern",
+          "name": "actionPattern",
+          "width": "auto",
+          "add": "30:30, 55:60, 75:90, 100:100",
+          "edit": { "type": "ValidationTextBox" }
         }
-    ],
-    "actions": [
-        { "type": "Button", "label": "Start Calibration", "onClick": "ORCH_StartCalibration($id);" },
-        { "type": "Button", "label": "Stop Calibration", "onClick": "ORCH_StopCalibration($id);" }
-    ],
-    "status": [
-        { "code": 102, "icon": "active", "caption": "Orchestrator is Idle." },
-        { "code": 201, "icon": "active", "caption": "Calibration is Running." },
-        { "code": 202, "icon": "error", "caption": "Module links are not configured." },
-        { "code": 203, "icon": "active", "caption": "Calibration is Done." }
-    ]
+      ]
+    },
+
+    { "type": "Label", "label": " " },
+    { "type": "Label", "name": "CalStatusLabel", "label": "Calibration: Idle" }
+  ],
+
+  "actions": [
+    { "type": "Button", "label": "Start Calibration", "onClick": "ORCH_StartCalibration($id);" },
+    { "type": "Button", "label": "Stop Calibration", "onClick": "ORCH_StopCalibration($id);" }
+  ],
+
+  "status": [
+    { "code": 102, "icon": "active", "caption": "OK" },
+    { "code": 202, "icon": "error", "caption": "Module links are not configured." }
+  ]
 }

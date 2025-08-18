@@ -48,6 +48,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $cal = $this->ReadAttributeString('CalibrationStatus');
         $this->LogMessage("ORCH status=102 (links ok) CalibrationStatus={$cal}", KL_MESSAGE);
         $this->SetStatus(102);
+        $this->uiSetCalStatus($this->ReadAttributeString('CalibrationStatus') ?: 'Idle');
 
         // Optional: sanity checks for callable APIs (warn only)
         $hasZDM = function_exists('ZDM_SetOverrideMode') && function_exists('ZDM_CommandSystem')
@@ -109,7 +110,10 @@ class HVAC_Learning_Orchestrator extends IPSModule
         }
 
         // Set status and initialize calibration
-        $this->WriteAttributeString('CalibrationStatus', 'Running');
+
+        $this->uiSetCalStatus('Running');
+        $this->SetStatus(102); // keep healthy code
+
         $this->WriteAttributeInteger('CurrentStageIndex', 0);
         $this->WriteAttributeInteger('CurrentActionIndex', 0);
         $this->SetStatus(102);
@@ -232,7 +236,7 @@ class HVAC_Learning_Orchestrator extends IPSModule
         }
 
         // 4) Status / UI
-        $this->WriteAttributeString('CalibrationStatus', 'Done');
+        $this->uiSetCalStatus('Done');
         $this->SetStatus(102); // grün bleiben
         $this->LogMessage('ORCH: Calibration finished (status=Done).', KL_MESSAGE);
 
@@ -250,15 +254,20 @@ class HVAC_Learning_Orchestrator extends IPSModule
             return;
         }
 
-        $plan = $this->getCalibrationPlan();
-        $stageIdx  = (int)$this->ReadAttributeInteger('CurrentStageIndex');
-        $actionIdx = (int)$this->ReadAttributeInteger('CurrentActionIndex');
-
-        if ($stageIdx >= count($plan)) {
-            $this->LogMessage('--- ORCH: Calibration Plan Finished Successfully! ---', KL_MESSAGE);
-            $this->StopCalibration();
-            return;
+        // NEW: pause when ZDM reports emergency; do not advance indices
+        $zid = (int)$this->ReadPropertyInteger('ZoningManagerID');
+        if ($zid > 0 && function_exists('ZDM_GetAggregates')) {
+            $agg = @json_decode(@ZDM_GetAggregates($zid), true);
+            if (is_array($agg) && !empty($agg['emergencyActive'])) {
+                $this->LogMessage('ORCH RunNextStep: paused (ZDM emergencyActive)', KL_WARNING);
+                // keep showing Running, just wait for next tick
+                $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
+                return;
+            }
         }
+
+        // (optional, keeps label fresh while stepping)
+        $this->uiSetCalStatus('Running');
 
         $currentStage = $plan[$stageIdx];
 
@@ -330,9 +339,17 @@ class HVAC_Learning_Orchestrator extends IPSModule
         // Set next timer interval (always use ZDM interval)
         $this->SetTimerInterval('CalibrationTimer', $this->getZDMProcessingInterval());
     }
-/**
- * Get processing interval from linked ZDM module
- */
+
+
+    private function uiSetCalStatus(string $s): void
+    {
+        $this->WriteAttributeString('CalibrationStatus', $s);
+        try {
+            $this->UpdateFormField('CalStatusLabel', 'label', 'Calibration: ' . $s);
+        } catch (\Throwable $e) {
+            // Form might be closed; ignore
+        }
+    }
     private function getZDMProcessingInterval(): int
     {
         $zdmID = (int)$this->ReadPropertyInteger('ZoningManagerID');
