@@ -31,7 +31,6 @@ class adaptive_HVAC_control extends IPSModule
 
         $this->RegisterPropertyFloat('Alpha', 0.05);
         $this->RegisterPropertyFloat('Gamma', 0.90);
-        $this->RegisterPropertyFloat('DecayRate', 0.005);
 
         $this->RegisterPropertyInteger('MaxPowerDelta', 40);
         $this->RegisterPropertyInteger('MaxFanDelta', 40);
