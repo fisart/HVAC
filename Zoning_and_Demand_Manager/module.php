@@ -519,7 +519,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         ];
         // expose ZDM emergency state (hard cutoff) to consumers (ACIPS/ORCH)
         $agg['emergencyActive'] = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
-        
+
         $this->WriteAttributeString('LastAggregates', json_encode($agg));
         $this->log(3, 'agg_result', $agg);
 
@@ -605,7 +605,15 @@ class Zoning_and_Demand_Manager extends IPSModule
         }
     }
 
-
+    private function roomSize(array $r): float
+    {
+        $s = $r['size'] ?? 20;
+        if (!is_numeric($s)) return 20.0;
+        $s = (float)$s;
+        if ($s < 1.0)  $s = 1.0;
+        if ($s > 300.) $s = 300.;
+        return $s;
+    }
     private function isStandalone(): bool
     {
         $link = (int)$this->ReadPropertyInteger('StandaloneModeLink');
