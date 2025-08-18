@@ -422,6 +422,8 @@ class HVAC_Learning_Orchestrator extends IPSModule
             }
             $keys = array_keys($pick);
         }
+        $keys = $this->orderActionsSmooth($keys);
+        $actionPatternString = implode(', ', $keys);
         // fallback if ACIPS had none
         if (empty($keys)) $keys = ['55:50','80:80','100:100'];
 
@@ -474,7 +476,43 @@ class HVAC_Learning_Orchestrator extends IPSModule
         $this->LogMessage('ORCH generateProposedPlan: plan created with '.count($finalPlan).' stages', KL_MESSAGE);
         return $finalPlan;
     }
-    
+    private function orderActionsSmooth(array $keys): array
+    {
+        $acts = [];
+        foreach ($keys as $k) {
+            if (strpos($k, ':') === false) continue;
+            [$p,$f] = array_map('intval', explode(':', $k, 2));
+            $acts[] = ['k'=>$k, 'p'=>$p, 'f'=>$f, 'load'=>$p+$f];
+        }
+        if (empty($acts)) return [];
+
+        // start from the lowest load
+        usort($acts, fn($a,$b) => $a['load'] <=> $b['load']);
+
+        $seq = [];
+        $used = array_fill(0, count($acts), false);
+        $seq[] = $acts[0];
+        $used[0] = true;
+
+        while (count($seq) < count($acts)) {
+            $last = end($seq);
+            $bestI = -1; $bestD = PHP_INT_MAX; $bestLoad = PHP_INT_MAX;
+            foreach ($acts as $i => $a) {
+                if ($used[$i]) continue;
+                $dp = $a['p'] - $last['p'];
+                $df = $a['f'] - $last['f'];
+                $d  = $dp*$dp + $df*$df;               // squared distance
+                if ($d < $bestD || ($d === $bestD && $a['load'] < $bestLoad)) {
+                    $bestD = $d; $bestI = $i; $bestLoad = $a['load'];
+                }
+            }
+            $seq[] = $acts[$bestI];
+            $used[$bestI] = true;
+        }
+
+        return array_map(fn($a) => $a['k'], $seq);
+    }
+
     private function generateFlapConfigString(array $all, array $active): string
     {
         $parts = [];
