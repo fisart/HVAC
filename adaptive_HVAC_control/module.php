@@ -302,8 +302,11 @@ class adaptive_HVAC_control extends IPSModule
         // Block forced actions during ZDM emergency to preserve emergency fan
         $agg0 = $this->fetchZDMAggregates();
         if (is_array($agg0) && !empty($agg0['emergencyActive'])) {
-            $this->log(1, 'skip_tick_emergency_from_zdm', ['coil'=>$agg0['coilTemp'] ?? null]);
-            return;
+            $this->log(1, 'force_blocked_emergency_from_zdm', [
+                'pair' => $pair,
+                'coil' => $agg0['coilTemp'] ?? null
+            ]);
+            return json_encode(['ok' => false, 'err' => 'emergency_active']);
         }
         // Demand & safety gates
         if (!$this->hasZdmCoolingDemand()) {
