@@ -56,6 +56,7 @@
         { "caption": "Target Temp (SOLL)", "name": "targetID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
         { "caption": "Demand Output (to Adaptive Module)", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" }, "visible": "!this.StandaloneMode" },
         { "caption": "Room Size (m²)", "name": "size", "width": "110px","add": 20, "edit": { "type": "NumberSpinner", "minimum": 1, "maximum": 300 } },
+        { "caption": "Threshold (°C)", "name": "threshold", "width": "110px","add": 0.5, "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0.0, "maximum": 5.0 } },
         { "caption": "Flap Control Variable", "name": "flapID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
         {
           "caption": "Flap Type",

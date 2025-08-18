@@ -595,6 +595,17 @@ class Zoning_and_Demand_Manager extends IPSModule
         return $this->ReadPropertyString('ControlledRooms');
     }
 
+    private function roomThreshold(array $r): float {
+        $t = $r['threshold'] ?? 0.5;
+        if (!is_numeric($t)) return 0.5;
+        $t = (float)$t;
+        if ($t < 0.0) $t = 0.0;
+        if ($t > 5.0) $t = 5.0;
+        return $t;
+    }
+
+
+
     // ---------- Intern: Flaps/System ----------
 
     private function applyAllFlaps(bool $open): void
