@@ -36,7 +36,7 @@
 
     { "type": "Label", "label": "--- Notabschaltung (Spulenschutz) ---" },
     { "type": "SelectVariable", "name": "CoilTemperatureLink", "caption": "Spulentemperatur-Sensor" },
-    { "type": "NumberSpinner", "name": "EmergencyShutdownTemp", "caption": "Abschalttemperatur (°C)", "digits": 1, "minimum": -5.0, "maximum": 10.0, "value": 1.0 },
+    { "type": "NumberSpinner", "name": "EmergencyShutdownTemp", "caption": "Abschalttemperatur (°C)", "digits": 1, "minimum": -5.0, "maximum": 15.0, "value": 1.0 },
     { "type": "NumberSpinner", "name": "EmergencyRestartTemp", "caption": "Wiedereinschalttemperatur (°C)", "digits": 1, "minimum": 0.0, "maximum": 15.0, "value": 5.0 },
     { "type": "NumberSpinner", "name": "EmergencyFanPercent", "caption": "Notbetrieb: Lüfter (%)", "digits": 0, "minimum": 0, "maximum": 100, "value": 60 },
     { "type": "CheckBox", "name": "EmergencyCloseFlaps", "caption": "Im Notfall Klappen schließen", "value": false },
