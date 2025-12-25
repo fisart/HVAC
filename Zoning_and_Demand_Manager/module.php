@@ -151,17 +151,34 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function ProcessZoning(): void
     {
+        // 1. Technical Guards
         if (IPS_GetKernelRunlevel() !== KR_READY) {
             $this->log(1, 'kernel_not_ready_skip');
             return;
         }
 
-        if (!$this->guardEnter()) { $this->log(1, 'guard_timeout'); return; }
+        if (!$this->guardEnter()) { 
+            $this->log(1, 'guard_timeout'); 
+            return; 
+        }
+
         $shouldTickACIPS = false;
+
         try {
             // =================================================================
-            // === NOT-AUS-LOGIK (höchste Priorität) | AC AUS, LÜFTER WEITER ===
+            // === ABSOLUTE MASTER CHECK: HEATING / VENTILATION             ===
             // =================================================================
+            // If heating is active, we stop immediately and silently. 
+            // We do NOT send any 0% or OFF commands to leave control to the heating master.
+            if ($this->isBlockedByHeatingOrVentilation()) {
+                $this->log(2, 'Master Override: Heating/Ventilation active. Cooling module is now idle.');
+                return; 
+            }
+
+            // =================================================================
+            // === NOT-AUS-LOGIK (Spulenschutz)                              ===
+            // =================================================================
+            // Note: This only runs if Heating is NOT active.
             $coilSensorID = (int)$this->ReadPropertyInteger('CoilTemperatureLink');
             if ($coilSensorID > 0) {
                 $shutdownTemp = (float)$this->ReadPropertyFloat('EmergencyShutdownTemp');
@@ -169,25 +186,20 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $coilTemp     = $this->GetFloat($coilSensorID);
                 $isShutdown   = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
 
-                // neue Parameter: Lüfter-Notbetrieb & optional Klappen schließen
                 $fanPct = $this->readEmergencyFanPercent();
                 $closeFlaps = (bool)$this->ReadPropertyBoolean('EmergencyCloseFlaps');
 
                 if ($isShutdown) {
-                    // Wir SIND im Not-Aus-Zustand. Prüfe, ob wir wieder starten dürfen.
                     if (is_finite($coilTemp) && $coilTemp >= $restartTemp) {
                         $this->WriteAttributeBoolean('EmergencyShutdownActive', false);
                         $this->log(2, 'emergency_shutdown_ended', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
-                        // weiter mit normaler Logik
                     } else {
-                        // immer noch zu kalt → AC aus, Lüfter im Notbetrieb
                         $this->log(1, 'emergency_shutdown_maintained', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
                         $this->systemSetPercent(0, $fanPct);
                         if ($closeFlaps) { $this->applyAllFlaps(false); }
                         return;
                     }
                 } else {
-                    // NORMAL-Betrieb. Prüfe, ob Not-Aus aktivieren.
                     if (is_finite($coilTemp) && $coilTemp <= $shutdownTemp) {
                         $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
                         $this->log(0, 'EMERGENCY_SHUTDOWN_ACTIVATED', ['coilTemp' => $coilTemp, 'shutdownTemp' => $shutdownTemp]);
@@ -197,21 +209,16 @@ class Zoning_and_Demand_Manager extends IPSModule
                     }
                 }
             }
-            // === ENDE NOT-AUS-LOGIK ===
-            // =================================================================
 
+            // =================================================================
+            // === OVERRIDE & NORMAL LOGIC                                   ===
+            // =================================================================
+            
             // Override-Modus blockiert die normale Regelung
             $override = GetValue($this->GetIDForIdent('OverrideActive'));
             if ($override) {
                 $this->log(2, 'override_active_mode_process');
                 $this->GetAggregates();
-                return;
-            }
-
-            if ($this->isBlockedByHeatingOrVentilation()) {
-                $this->log(2, 'blocked_by_heating_or_ventilation');
-                $this->systemSetPercent(0, 0); // hier auch Lüfter aus, da kein Notfall
-                $this->applyAllFlaps(false);
                 return;
             }
 
@@ -224,7 +231,7 @@ class Zoning_and_Demand_Manager extends IPSModule
             // ---- Zustandshysterese (pro Raum) ----
             $anyDemand = false;
             $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
-            $hmap = $this->getHystState(); // { roomName => bool }
+            $hmap = $this->getHystState(); 
 
             foreach ($rooms as $room) {
                 $name = (string)($room['name'] ?? 'room');
@@ -232,13 +239,11 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $airSollStatusVarID = (int)($room['airSollStatusID'] ?? 0);
                 $demandVarID        = (int)($room['demandID'] ?? 0);
 
-                // Fenster-Override hat Vorrang
                 if ($this->isWindowOpenStable($room)) {
                     $this->setFlap($room, false);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 3);
                     if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
-                    $hmap[$name] = false; // Hysterese-Zustand zurücksetzen
-                    $this->log(3, 'room_window_open_flap_closed', ['room' => $name]);
+                    $hmap[$name] = false; 
                     continue;
                 }
 
@@ -246,7 +251,6 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $roomHasDemand = false;
 
                 if ($roomMode === 2) {
-                    // Direkter Vergleich (ohne Hysterese), Hysterese-Map nur spiegeln
                     $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
                     $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
                     $roomHasDemand = (is_finite($ist) && is_finite($soll) && $ist > $soll);
@@ -255,27 +259,18 @@ class Zoning_and_Demand_Manager extends IPSModule
                         $this->writeVarSmart($airSollStatusVarID, 1);
                     }
                 } elseif ($roomMode === 3) {
-                    // Echte Hysterese mit Gedächtnis:
-                    //  - Wenn vorher AUS: AN bei (ist - soll) >= hyst
-                    //  - Wenn vorher AN : AN bis (ist - soll) <= 0
                     $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
                     $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
                     $prev = (bool)($hmap[$name] ?? false);
 
                     if (!is_finite($ist) || !is_finite($soll)) {
-                        $this->log(1, 'hyst_invalid_values', ['room'=>$name,'ist'=>$ist,'soll'=>$soll]);
                         $roomHasDemand = false;
                     } else {
                         $delta = $ist - $soll;
                         $roomHasDemand = $prev ? ($delta > 0.0) : ($delta >= $hyst);
-                        $this->log(3, 'hyst_eval', [
-                            'room'=>$name,'prev'=>$prev,'ist'=>$ist,'soll'=>$soll,
-                            'delta'=>$delta,'on_thr'=>$hyst,'off_thr'=>0.0,'new'=>$roomHasDemand
-                        ]);
                     }
                     $hmap[$name] = $roomHasDemand;
                 } else {
-                    // Mode 1 oder unbekannt: kein Bedarf
                     $hmap[$name] = false;
                 }
 
@@ -284,24 +279,19 @@ class Zoning_and_Demand_Manager extends IPSModule
                     $anyDemand = true;
                     if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 3);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 2);
-                    $this->log(2, 'room_demand_on', ['room' => $name, 'mode' => $roomMode]);
                 } else {
                     $this->setFlap($room, false);
                     if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 0);
-                    $this->log(2, 'room_demand_off', ['room' => $name, 'mode' => $roomMode]);
                 }
             }
 
-            // Persistiere Hysterese-Zustände einmal pro Tick
             $this->setHystState($hmap);
 
-            $this->log(2, 'DECIDE_SYSTEM', ['anyDemand' => $anyDemand]);
             if ($anyDemand) {
                 if ($this->isStandalone()) {
                     $this->systemOnStandalone();
                 } else {
-                    // Kooperativer Modus: minimal anfordern, ACIPS passt an
                     $this->systemSetPercent(1, 1);
                     $shouldTickACIPS = !(bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
                 }
@@ -315,18 +305,13 @@ class Zoning_and_Demand_Manager extends IPSModule
             $this->guardLeave();
         }
 
-        // ---- ACIPS außerhalb der Semaphore triggern (Deadlock vermeiden) ----
         if ($shouldTickACIPS) {
             $acipsID = (int)$this->ReadPropertyInteger('AdaptiveInstanceID');
             if ($acipsID > 0 && IPS_InstanceExists($acipsID)) {
                 @IPS_RunScriptText('ACIPS_ProcessLearning(' . $acipsID . ');');
-                $this->log(3, 'triggered_acips_tick', ['acipsID' => $acipsID]);
-            } else {
-                $this->log(1, 'acips_not_configured_for_trigger', ['acipsID' => $acipsID]);
             }
         }
     }
-   
 
 
     // ---------- Public (Orchestrator APIs) ----------
