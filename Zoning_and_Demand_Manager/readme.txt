@@ -9,6 +9,26 @@ Dieses Modul agiert als Master-Regel-Engine für ein Mehrzonen-HVAC-System. Es s
 
 Das Modul steuert direkt die Luftklappen der einzelnen Zonen und signalisiert den Kühlbedarf an das adaptive Modul.
 
+### Kühlungsmodus je Raum (ab Version 1.5.0)
+Die konfigurierte Modusvariable ist ein dauerhafter Bedienbefehl:
+
+- `1` = Aus: keine Kühlung
+- `2` = Einmalige Kühlung: kühlt bis zur Zieltemperatur und setzt den Modus danach auf `1`
+- `3` = Automatik: schaltet mit Hysterese ein und bei Erreichen der Zieltemperatur aus; der Modus bleibt `3`
+
+Ein geöffnetes Fenster oder eine geöffnete Tür unterbricht die Kühlung nur
+vorübergehend. Der Modus `2` oder `3` bleibt erhalten. Wenn dieselbe Variable
+als Moduseingang und Demand-Ausgang eingetragen ist, wird sie nicht mit einem
+momentanen Ausgangswert überschrieben. Der tatsächliche Kühlbedarf wird intern
+und über die Phaseninformation abgebildet.
+
+### Konfigurationssicherung (ab Version 1.5.0)
+Im Aktionsbereich kann die vollständige Modulkonfiguration als JSON exportiert
+und wieder importiert werden. Die Sicherung enthält insbesondere alle
+Verknüpfungen und die komplette Raumtabelle. Laufzeitzustände, Hysteresemerker
+und Diagnosewerte werden nicht gesichert. Nach einem Import sollten die
+Objekt-IDs und Raumzuordnungen überprüft werden.
+
 ### Diagnosestatus (ab Version 1.4.0)
 Unterhalb der Modulinstanz wird die Stringvariable `Zoning decision status`
 angelegt. Sie enthält den letzten entscheidungsrelevanten Zustand als gut
