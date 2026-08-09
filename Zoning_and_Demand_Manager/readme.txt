@@ -9,6 +9,23 @@ Dieses Modul agiert als Master-Regel-Engine für ein Mehrzonen-HVAC-System. Es s
 
 Das Modul steuert direkt die Luftklappen der einzelnen Zonen und signalisiert den Kühlbedarf an das adaptive Modul.
 
+### Diagnosestatus (ab Version 1.4.0)
+Unterhalb der Modulinstanz wird die Stringvariable `Zoning decision status`
+angelegt. Sie enthält den letzten entscheidungsrelevanten Zustand als gut
+lesbares JSON. Erfasst werden unter anderem:
+
+- Gesamtentscheidung und Begründung
+- Betriebsart, Master-Sperren und Spulenschutz
+- Ist-/Solltemperatur und Temperaturdifferenz je Raum
+- Raumbetriebsart, stabiler Fensterstatus und Hysteresezustand
+- Kühlbedarf, Klappenbefehl, Demand- und Phasenausgabe je Raum
+- Systembefehl sowie aggregierte Werte für die adaptive Regelung
+
+Die Variable wird nur aktualisiert, wenn sich der Zustand oder eine Entscheidung
+ändert. Der Zeitstempel `lastChanged` zeigt den Zeitpunkt dieser Änderung. Das
+vermeidet unnötige Variablen- und Archivschreibvorgänge. Für eine Fehleranalyse
+kann der komplette Inhalt der Variable kopiert und weitergegeben werden.
+
 ### Voraussetzungen
 - IP-Symcon Version 5.0 oder höher
 

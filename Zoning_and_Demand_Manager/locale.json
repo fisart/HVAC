@@ -40,6 +40,7 @@
       "Window/Door Category": "Window/Door Category",
 
       "--- Status ---": "--- Status ---",
+      "Zoning decision status": "Zoning decision status",
       "Override active (read-only):": "Override active (read-only):",
       "OK": "OK",
       "Configuration incomplete": "Configuration incomplete"
@@ -84,6 +85,7 @@
       "Window/Door Category": "Fenster/Tür-Kategorie",
 
       "--- Status ---": "--- Status ---",
+      "Zoning decision status": "Zonen-Entscheidungsstatus",
       "Override active (read-only):": "Override aktiv (nur Anzeige):",
       "OK": "OK",
       "Configuration incomplete": "Konfiguration unvollständig"

@@ -2,7 +2,7 @@
 /**
  * Zoning_and_Demand_Manager
  *
- * Version: 1.3.1 (Startup guard + safe JSON decode)
+ * Version: 1.4.0 (Decision status diagnostics)
  * Vendor:  Artur Fischer & AI Consultant
  *
  * Kurzbeschreibung:
@@ -67,10 +67,13 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterAttributeString('LastAggregates', '{}');  // Cache/Debug
         $this->RegisterAttributeString('LastOrchestratorFlaps', '[]');
         $this->RegisterAttributeString('RoomHystState', '{}'); // per-room latched demand (bool)
+        $this->RegisterAttributeString('LastDecisionFingerprint', '');
 
         // ---- Status-Variablen ----
         $this->RegisterVariableBoolean('OverrideActive', 'Override active', '~Alert', 10);
         $this->DisableAction('OverrideActive'); // nur Anzeige
+        $this->RegisterVariableString('DecisionStatus', 'Zoning decision status', '~TextBox', 20);
+        $this->DisableAction('DecisionStatus'); // nur Anzeige / zum Kopieren für Diagnosezwecke
 
         // ---- Timer ----
         $this->RegisterTimer('ZDM_Timer', 0, 'ZDM_ProcessZoning($_IPS[\'TARGET\']);');
@@ -154,15 +157,49 @@ class Zoning_and_Demand_Manager extends IPSModule
         // 1. Technical Guards
         if (IPS_GetKernelRunlevel() !== KR_READY) {
             $this->log(1, 'kernel_not_ready_skip');
+            $this->publishDecisionStatus([
+                'result' => 'skipped',
+                'reason' => 'IP-Symcon kernel is not ready'
+            ]);
             return;
         }
 
         if (!$this->guardEnter()) { 
-            $this->log(1, 'guard_timeout'); 
+            $this->log(1, 'guard_timeout');
+            $this->publishDecisionStatus([
+                'result' => 'skipped',
+                'reason' => 'Semaphore timeout; another zoning cycle is still running'
+            ]);
             return; 
         }
 
         $shouldTickACIPS = false;
+        $diagnostics = [
+            'result' => 'processing',
+            'reason' => '',
+            'mode' => $this->isStandalone() ? 'standalone' : 'cooperative',
+            'masterBlocks' => [
+                'heating' => false,
+                'ventilation' => false
+            ],
+            'overrideActive' => false,
+            'coilProtection' => [
+                'sensorID' => (int)$this->ReadPropertyInteger('CoilTemperatureLink'),
+                'temperatureC' => null,
+                'shutdownAtC' => (float)$this->ReadPropertyFloat('EmergencyShutdownTemp'),
+                'restartAtC' => (float)$this->ReadPropertyFloat('EmergencyRestartTemp'),
+                'emergencyActive' => (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive')
+            ],
+            'hysteresisC' => (float)$this->ReadPropertyFloat('Hysteresis'),
+            'rooms' => [],
+            'summary' => [
+                'configuredRooms' => 0,
+                'roomsWithDemand' => 0,
+                'anyDemand' => false
+            ],
+            'systemCommand' => null,
+            'adaptiveTickRequested' => false
+        ];
 
         try {
             // =================================================================
@@ -170,8 +207,25 @@ class Zoning_and_Demand_Manager extends IPSModule
             // =================================================================
             // If heating is active, we stop immediately and silently. 
             // We do NOT send any 0% or OFF commands to leave control to the heating master.
-            if ($this->isBlockedByHeatingOrVentilation()) {
+            $heatingID = (int)$this->ReadPropertyInteger('HeatingActiveLink');
+            $ventilationID = (int)$this->ReadPropertyInteger('VentilationActiveLink');
+            $heatingActive = ($heatingID > 0) && $this->varTruthy($heatingID);
+            $ventilationActive = ($ventilationID > 0) && $this->varTruthy($ventilationID);
+            $diagnostics['masterBlocks'] = [
+                'heating' => $heatingActive,
+                'heatingVariableID' => $heatingID,
+                'ventilation' => $ventilationActive,
+                'ventilationVariableID' => $ventilationID
+            ];
+
+            if ($heatingActive || $ventilationActive) {
                 $this->log(2, 'Master Override: Heating/Ventilation active. Cooling module is now idle.');
+                $diagnostics['result'] = 'blocked';
+                $diagnostics['reason'] = $heatingActive && $ventilationActive
+                    ? 'Heating and ventilation are active; cooling control remains idle'
+                    : ($heatingActive
+                        ? 'Heating is active; cooling control remains idle'
+                        : 'Ventilation is active; cooling control remains idle');
                 return; 
             }
 
@@ -186,6 +240,9 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $coilTemp     = $this->GetFloat($coilSensorID);
                 $isShutdown   = (bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
 
+                $diagnostics['coilProtection']['temperatureC'] = is_finite($coilTemp) ? round($coilTemp, 2) : null;
+                $diagnostics['coilProtection']['emergencyActive'] = $isShutdown;
+
                 $fanPct = $this->readEmergencyFanPercent();
                 $closeFlaps = (bool)$this->ReadPropertyBoolean('EmergencyCloseFlaps');
 
@@ -193,10 +250,20 @@ class Zoning_and_Demand_Manager extends IPSModule
                     if (is_finite($coilTemp) && $coilTemp >= $restartTemp) {
                         $this->WriteAttributeBoolean('EmergencyShutdownActive', false);
                         $this->log(2, 'emergency_shutdown_ended', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
+                        $diagnostics['coilProtection']['emergencyActive'] = false;
+                        $diagnostics['coilProtection']['event'] = 'emergency_cleared';
                     } else {
                         $this->log(1, 'emergency_shutdown_maintained', ['coilTemp' => $coilTemp, 'restartTemp' => $restartTemp]);
                         $this->systemSetPercent(0, $fanPct);
                         if ($closeFlaps) { $this->applyAllFlaps(false); }
+                        $diagnostics['result'] = 'emergency';
+                        $diagnostics['reason'] = 'Coil emergency remains active until restart temperature is reached';
+                        $diagnostics['systemCommand'] = [
+                            'powerPercent' => 0,
+                            'fanPercent' => $fanPct,
+                            'meaning' => 'coil protection: compressor off, emergency fan active'
+                        ];
+                        $diagnostics['coilProtection']['flapsClosed'] = $closeFlaps;
                         return;
                     }
                 } else {
@@ -205,6 +272,16 @@ class Zoning_and_Demand_Manager extends IPSModule
                         $this->log(0, 'EMERGENCY_SHUTDOWN_ACTIVATED', ['coilTemp' => $coilTemp, 'shutdownTemp' => $shutdownTemp]);
                         $this->systemSetPercent(0, $fanPct);
                         if ($closeFlaps) { $this->applyAllFlaps(false); }
+                        $diagnostics['result'] = 'emergency';
+                        $diagnostics['reason'] = 'Coil temperature reached the emergency shutdown threshold';
+                        $diagnostics['systemCommand'] = [
+                            'powerPercent' => 0,
+                            'fanPercent' => $fanPct,
+                            'meaning' => 'coil protection: compressor off, emergency fan active'
+                        ];
+                        $diagnostics['coilProtection']['emergencyActive'] = true;
+                        $diagnostics['coilProtection']['event'] = 'emergency_activated';
+                        $diagnostics['coilProtection']['flapsClosed'] = $closeFlaps;
                         return;
                     }
                 }
@@ -216,15 +293,21 @@ class Zoning_and_Demand_Manager extends IPSModule
             
             // Override-Modus blockiert die normale Regelung
             $override = GetValue($this->GetIDForIdent('OverrideActive'));
+            $diagnostics['overrideActive'] = (bool)$override;
             if ($override) {
                 $this->log(2, 'override_active_mode_process');
-                $this->GetAggregates();
+                $diagnostics['result'] = 'override';
+                $diagnostics['reason'] = 'Learning orchestrator override is active; normal zoning decisions are suspended';
+                $diagnostics['aggregates'] = $this->decodeJsonObject($this->GetAggregates());
                 return;
             }
 
             $rooms = $this->getRooms();
+            $diagnostics['summary']['configuredRooms'] = count($rooms);
             if (!$rooms) {
                 $this->log(2, 'no_rooms_configured');
+                $diagnostics['result'] = 'idle';
+                $diagnostics['reason'] = 'No controlled rooms are configured';
                 return;
             }
 
@@ -238,40 +321,86 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $coolingPhaseVarID  = (int)($room['coolingPhaseInfoID'] ?? 0);
                 $airSollStatusVarID = (int)($room['airSollStatusID'] ?? 0);
                 $demandVarID        = (int)($room['demandID'] ?? 0);
+                $tempVarID          = (int)($room['tempID'] ?? 0);
+                $targetVarID        = (int)($room['targetID'] ?? 0);
+                $flapVarID          = (int)($room['flapID'] ?? 0);
+                $ist                = $this->GetFloat($tempVarID);
+                $soll               = $this->GetFloat($targetVarID);
+                $delta              = (is_finite($ist) && is_finite($soll)) ? ($ist - $soll) : NAN;
+                $prev               = (bool)($hmap[$name] ?? false);
+                $roomMode           = ($airSollStatusVarID > 0) ? $this->GetInt($airSollStatusVarID) : 3;
+                $windowOpen         = $this->isWindowOpenStable($room);
 
-                if ($this->isWindowOpenStable($room)) {
+                $roomDiagnostic = [
+                    'name' => $name,
+                    'temperatureVariableID' => $tempVarID,
+                    'targetVariableID' => $targetVarID,
+                    'actualC' => is_finite($ist) ? round($ist, 2) : null,
+                    'targetC' => is_finite($soll) ? round($soll, 2) : null,
+                    'deltaC' => is_finite($delta) ? round($delta, 2) : null,
+                    'startDemandAtDeltaC' => $hyst,
+                    'stopDemandAtDeltaC' => 0.0,
+                    'modeVariableID' => $airSollStatusVarID,
+                    'modeValue' => $roomMode,
+                    'mode' => $this->roomModeLabel($roomMode),
+                    'windowCategoryID' => (int)($room['windowCatID'] ?? 0),
+                    'windowOpenStable' => $windowOpen,
+                    'previousDemand' => $prev,
+                    'demand' => false,
+                    'decision' => '',
+                    'flapVariableID' => $flapVarID,
+                    'flapCommand' => 'closed',
+                    'demandVariableID' => $demandVarID,
+                    'demandOutputValue' => 0,
+                    'phaseVariableID' => $coolingPhaseVarID,
+                    'phaseOutputValue' => 0
+                ];
+
+                if ($windowOpen) {
                     $this->setFlap($room, false);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 3);
                     if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
-                    $hmap[$name] = false; 
+                    $hmap[$name] = false;
+                    $roomDiagnostic['decision'] = 'blocked_by_open_window_or_door';
+                    $roomDiagnostic['phaseOutputValue'] = 3;
+                    $diagnostics['rooms'][] = $roomDiagnostic;
                     continue;
                 }
 
-                $roomMode = ($airSollStatusVarID > 0) ? $this->GetInt($airSollStatusVarID) : 3;
                 $roomHasDemand = false;
 
                 if ($roomMode === 2) {
-                    $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
-                    $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
                     $roomHasDemand = (is_finite($ist) && is_finite($soll) && $ist > $soll);
                     $hmap[$name] = $roomHasDemand;
+                    $roomDiagnostic['decision'] = $roomHasDemand
+                        ? 'one_time_cooling_until_target_is_reached'
+                        : 'one_time_cooling_target_reached';
                     if (!$roomHasDemand && $airSollStatusVarID > 0) {
                         $this->writeVarSmart($airSollStatusVarID, 1);
+                        $roomDiagnostic['modeResetOutputValue'] = 1;
                     }
                 } elseif ($roomMode === 3) {
-                    $ist  = $this->GetFloat((int)($room['tempID'] ?? 0));
-                    $soll = $this->GetFloat((int)($room['targetID'] ?? 0));
-                    $prev = (bool)($hmap[$name] ?? false);
-
                     if (!is_finite($ist) || !is_finite($soll)) {
                         $roomHasDemand = false;
+                        $roomDiagnostic['decision'] = 'invalid_actual_or_target_temperature';
                     } else {
-                        $delta = $ist - $soll;
                         $roomHasDemand = $prev ? ($delta > 0.0) : ($delta >= $hyst);
+                        if ($roomHasDemand) {
+                            $roomDiagnostic['decision'] = $prev
+                                ? 'auto_cooling_continues_until_target_is_reached'
+                                : 'auto_cooling_started_at_hysteresis_threshold';
+                        } else {
+                            $roomDiagnostic['decision'] = $prev
+                                ? 'auto_cooling_stopped_at_target'
+                                : 'auto_waiting_below_hysteresis_threshold';
+                        }
                     }
                     $hmap[$name] = $roomHasDemand;
                 } else {
                     $hmap[$name] = false;
+                    $roomDiagnostic['decision'] = ($roomMode === 1)
+                        ? 'room_cooling_mode_is_off'
+                        : 'unknown_room_mode_treated_as_off';
                 }
 
                 if ($roomHasDemand) {
@@ -279,29 +408,62 @@ class Zoning_and_Demand_Manager extends IPSModule
                     $anyDemand = true;
                     if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 3);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 2);
+                    $roomDiagnostic['demand'] = true;
+                    $roomDiagnostic['flapCommand'] = 'open';
+                    $roomDiagnostic['demandOutputValue'] = 3;
+                    $roomDiagnostic['phaseOutputValue'] = 2;
+                    $diagnostics['summary']['roomsWithDemand']++;
                 } else {
                     $this->setFlap($room, false);
                     if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 0);
                 }
+                $diagnostics['rooms'][] = $roomDiagnostic;
             }
 
             $this->setHystState($hmap);
 
             if ($anyDemand) {
                 if ($this->isStandalone()) {
-                    $this->systemOnStandalone();
+                    $diagnostics['systemCommand'] = $this->systemOnStandalone();
+                    $diagnostics['systemCommand']['meaning'] = 'standalone output command';
                 } else {
                     $this->systemSetPercent(1, 1);
+                    $diagnostics['systemCommand'] = [
+                        'powerPercent' => 1,
+                        'fanPercent' => 1,
+                        'meaning' => 'cooperative enable signal; adaptive module selects final output'
+                    ];
                     $shouldTickACIPS = !(bool)$this->ReadAttributeBoolean('EmergencyShutdownActive');
                 }
             } else {
                 $this->systemSetPercent(0, 0);
+                $diagnostics['systemCommand'] = [
+                    'powerPercent' => 0,
+                    'fanPercent' => 0,
+                    'meaning' => 'no cooling demand; system off'
+                ];
             }
 
-            $this->GetAggregates();
+            $diagnostics['summary']['anyDemand'] = $anyDemand;
+            $diagnostics['result'] = $anyDemand ? 'cooling_demand' : 'idle';
+            $diagnostics['reason'] = $anyDemand
+                ? $diagnostics['summary']['roomsWithDemand'] . ' room(s) request cooling'
+                : 'No room currently requests cooling';
+            $diagnostics['adaptiveTickRequested'] = $shouldTickACIPS;
+            $diagnostics['aggregates'] = $this->decodeJsonObject($this->GetAggregates());
 
+        } catch (\Throwable $e) {
+            $diagnostics['result'] = 'error';
+            $diagnostics['reason'] = 'Exception while processing zoning';
+            $diagnostics['error'] = [
+                'type' => get_class($e),
+                'message' => $e->getMessage(),
+                'line' => $e->getLine()
+            ];
+            throw $e;
         } finally {
+            $this->publishDecisionStatus($diagnostics);
             $this->guardLeave();
         }
 
@@ -597,6 +759,10 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $this->applyAllFlaps(false);
             }
         }
+
+        // Seltenes Ereignis: Diagnosezustand unmittelbar aktualisieren,
+        // statt bis zum nächsten regulären Timerlauf zu warten.
+        $this->ProcessZoning();
     }
 
 
@@ -682,7 +848,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($link > 0 && IPS_VariableExists($link)) {
             return $this->varTruthy($link);
         }
-        return (bool)$this->isStandalone();
+        return (bool)$this->ReadPropertyBoolean('StandaloneMode');
     }
 
 
@@ -834,7 +1000,7 @@ class Zoning_and_Demand_Manager extends IPSModule
     }
 
 
-    private function systemOnStandalone(): void
+    private function systemOnStandalone(): array
     {
         // Werte aus Variablen, sonst auf Konstanten zurückfallen
         $p = $this->readStandalonePercent('StandalonePowerVar',    (int)$this->ReadPropertyInteger('ConstantPower'));
@@ -842,6 +1008,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $this->systemSetPercent($p, $f);
         $this->log(2, 'system_on_standalone', ['power'=>$p, 'fan'=>$f]);
+        return ['powerPercent' => $p, 'fanPercent' => $f];
     }
 
 
@@ -1266,6 +1433,60 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($val < $min) return $min;
         if ($val > $max) return $max;
         return $val;
+    }
+
+    /**
+     * Speichert den letzten entscheidungsrelevanten Zustand als lesbares JSON.
+     * Der Fingerprint enthält bewusst keinen Zeitstempel. Dadurch wird die
+     * Stringvariable nur beschrieben, wenn sich Zustand oder Entscheidung ändern.
+     */
+    private function publishDecisionStatus(array $status): void
+    {
+        $status['statusSchemaVersion'] = 1;
+
+        $canonical = json_encode(
+            $status,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($canonical === false) {
+            $this->log(1, 'decision_status_encode_failed');
+            return;
+        }
+
+        $fingerprint = hash('sha256', $canonical);
+        if (hash_equals($this->ReadAttributeString('LastDecisionFingerprint'), $fingerprint)) {
+            return;
+        }
+
+        $status['lastChanged'] = date(DATE_ATOM);
+        $pretty = json_encode(
+            $status,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($pretty === false) {
+            $this->log(1, 'decision_status_pretty_encode_failed');
+            return;
+        }
+
+        $statusID = $this->GetIDForIdent('DecisionStatus');
+        if ($statusID > 0 && IPS_VariableExists($statusID)) {
+            SetValue($statusID, $pretty);
+            $this->WriteAttributeString('LastDecisionFingerprint', $fingerprint);
+        }
+    }
+
+    private function decodeJsonObject(string $json): array
+    {
+        $decoded = json_decode($json, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function roomModeLabel(int $mode): string
+    {
+        if ($mode === 1) return 'off';
+        if ($mode === 2) return 'cool_once';
+        if ($mode === 3) return 'auto';
+        return 'unknown';
     }
 
     // ---------- Semaphore & Logging ----------
