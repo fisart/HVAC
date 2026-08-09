@@ -9,6 +9,21 @@ Dieses Modul agiert als Master-Regel-Engine für ein Mehrzonen-HVAC-System. Es s
 
 Das Modul steuert direkt die Luftklappen der einzelnen Zonen und signalisiert den Kühlbedarf an das adaptive Modul.
 
+### Maximale AC-Leistung bei nur einem Raum (ab Version 1.6.0)
+Für jeden Raum kann eine maximale AC-Leistung zwischen 1 und 100 Prozent
+eingestellt werden. Die Grenze wird ausschließlich im Standalone-Modus und nur
+dann angewendet, wenn genau dieser eine Raum Kühlung anfordert.
+
+Das Modul verwendet immer den kleineren Wert aus der aktuell eingestellten
+Standalone-AC-Leistung und der Raumobergrenze. Eine niedrigere Leistung wird
+deshalb niemals angehoben. Fordern zwei oder mehr Räume Kühlung an, gilt wieder
+die normale Standalone-AC-Leistung ohne raumbezogene Begrenzung. Bei bestehenden
+Raumkonfigurationen ohne dieses Feld wird automatisch 100 Prozent verwendet.
+
+Der Diagnosestatus zeigt die angeforderte Leistung, die wirksame Leistung, den
+allein aktiven Raum, seine Obergrenze und ob tatsächlich begrenzt wurde. Die
+Raumobergrenzen sind als Teil der Raumtabelle automatisch im JSON-Backup enthalten.
+
 ### Kühlungsmodus je Raum (ab Version 1.5.0)
 Die konfigurierte Modusvariable ist ein dauerhafter Bedienbefehl:
 
