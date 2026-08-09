@@ -54,7 +54,7 @@
         { "caption": "Room Name", "name": "name", "width": "150px", "add": "New Room", "edit": { "type": "ValidationTextBox" } },
         { "caption": "Temp Sensor (IST)", "name": "tempID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
         { "caption": "Target Temp (SOLL)", "name": "targetID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
-        { "caption": "Demand Output (to Adaptive Module)", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" }, "visible": "!this.StandaloneMode" },
+        { "caption": "Separate Demand Output (optional)", "name": "demandID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" }, "visible": "!this.StandaloneMode" },
         { "caption": "Room Size (m²)", "name": "size", "width": "110px","add": 20, "edit": { "type": "NumberSpinner", "minimum": 1, "maximum": 300 } },
         { "caption": "Threshold (°C)", "name": "threshold", "width": "110px","add": 0.5, "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0.0, "maximum": 5.0 } },
         { "caption": "Flap Control Variable", "name": "flapID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
@@ -75,7 +75,7 @@
         { "caption": "Value for CLOSED (boolean)", "name": "flapClosedValue", "width": "120px", "add": "false", "edit": { "type": "ValidationTextBox" }, "visible": "this.flapType === 'boolean'" },
         { "caption": "Open % (linear)", "name": "flapOpenLinear", "width": "120px", "add": 100, "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 }, "visible": "this.flapType === 'linear'" },
         { "caption": "Closed % (linear)", "name": "flapClosedLinear", "width": "120px", "add": 0, "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 100 }, "visible": "this.flapType === 'linear'" },
-        { "caption": "AC Mode Input (Air_Soll_Status)", "name": "airSollStatusID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
+        { "caption": "Cooling Mode (1=Off, 2=Once, 3=Auto)", "name": "airSollStatusID", "width": "230px", "add": 0, "edit": { "type": "SelectVariable" } },
         { "caption": "Phase Info Output (Cooling_Phase_Info)", "name": "coolingPhaseInfoID", "width": "200px", "add": 0, "edit": { "type": "SelectVariable" } },
         { "caption": "Window/Door Category", "name": "windowCatID", "width": "200px", "add": 0, "edit": { "type": "SelectCategory" } }
       ]
@@ -86,7 +86,41 @@
     { "type": "Label", "name": "OverrideActive", "caption": "—", "visible": true }
   ],
   "actions": [
-    { "type": "Button", "caption": "Run zoning now", "onClick": "ZDM_ProcessZoning($id);" }
+    { "type": "Button", "caption": "Run zoning now", "onClick": "ZDM_ProcessZoning($id);" },
+    {
+      "type": "ExpansionPanel",
+      "caption": "Configuration Backup / Restore",
+      "expanded": false,
+      "items": [
+        {
+          "type": "Label",
+          "caption": "Export creates a backup of all module properties, including the complete room configuration. Runtime states are not included."
+        },
+        {
+          "type": "ScriptEditor",
+          "name": "ConfigBackupJson",
+          "caption": "Configuration Backup JSON",
+          "value": "",
+          "rowCount": 12
+        },
+        {
+          "type": "RowLayout",
+          "items": [
+            {
+              "type": "Button",
+              "caption": "Export Configuration",
+              "onClick": "ZDM_UI_ExportConfig($id);"
+            },
+            {
+              "type": "Button",
+              "caption": "Import Configuration",
+              "onClick": "echo ZDM_UI_ImportConfig($id, $ConfigBackupJson);",
+              "confirm": "Importing replaces the current module configuration. Continue?"
+            }
+          ]
+        }
+      ]
+    }
   ],
   "status": [
     { "code": 102, "icon": "active", "caption": "OK" },

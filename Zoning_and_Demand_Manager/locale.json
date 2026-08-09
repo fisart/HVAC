@@ -26,7 +26,7 @@
       "Room Name": "Room Name",
       "Temp Sensor (IST)": "Temp Sensor (ACTUAL)",
       "Target Temp (SOLL)": "Target Temp (SETPOINT)",
-      "Demand Output (to Adaptive Module)": "Demand Output (to Adaptive Module)",
+      "Separate Demand Output (optional)": "Separate Demand Output (optional)",
       "Flap Control Variable": "Flap Control Variable",
       "Flap Type": "Flap Type",
       "Boolean": "Boolean",
@@ -35,7 +35,7 @@
       "Value for CLOSED (boolean)": "Value for CLOSED (boolean)",
       "Open % (linear)": "Open % (linear)",
       "Closed % (linear)": "Closed % (linear)",
-      "AC Mode Input (Air_Soll_Status)": "AC Mode Input (Air_Soll_Status)",
+      "Cooling Mode (1=Off, 2=Once, 3=Auto)": "Cooling Mode (1=Off, 2=Once, 3=Auto)",
       "Phase Info Output (Cooling_Phase_Info)": "Phase Info Output (Cooling_Phase_Info)",
       "Window/Door Category": "Window/Door Category",
 
@@ -43,7 +43,13 @@
       "Zoning decision status": "Zoning decision status",
       "Override active (read-only):": "Override active (read-only):",
       "OK": "OK",
-      "Configuration incomplete": "Configuration incomplete"
+      "Configuration incomplete": "Configuration incomplete",
+      "Configuration Backup / Restore": "Configuration Backup / Restore",
+      "Export creates a backup of all module properties, including the complete room configuration. Runtime states are not included.": "Export creates a backup of all module properties, including the complete room configuration. Runtime states are not included.",
+      "Configuration Backup JSON": "Configuration Backup JSON",
+      "Export Configuration": "Export Configuration",
+      "Import Configuration": "Import Configuration",
+      "Importing replaces the current module configuration. Continue?": "Importing replaces the current module configuration. Continue?"
     },
     "de": {
       "Standalone Mode": "Standalone-Modus",
@@ -71,7 +77,7 @@
       "Room Name": "Raumname",
       "Temp Sensor (IST)": "Temperatursensor (IST)",
       "Target Temp (SOLL)": "Zieltemperatur (SOLL)",
-      "Demand Output (to Adaptive Module)": "Bedarfsausgabe (an Adaptive-Modul)",
+      "Separate Demand Output (optional)": "Separater Bedarfsausgang (optional)",
       "Flap Control Variable": "Klappen-Steuervariable",
       "Flap Type": "Klappentyp",
       "Boolean": "Boolean",
@@ -80,7 +86,7 @@
       "Value for CLOSED (boolean)": "Wert für GESCHLOSSEN (Boolean)",
       "Open % (linear)": "Öffnen % (linear)",
       "Closed % (linear)": "Schließen % (linear)",
-      "AC Mode Input (Air_Soll_Status)": "AC-Modus-Eingang (Air_Soll_Status)",
+      "Cooling Mode (1=Off, 2=Once, 3=Auto)": "Kühlungsmodus (1=Aus, 2=Einmalig, 3=Automatik)",
       "Phase Info Output (Cooling_Phase_Info)": "Phaseninfo-Ausgang (Cooling_Phase_Info)",
       "Window/Door Category": "Fenster/Tür-Kategorie",
 
@@ -88,7 +94,13 @@
       "Zoning decision status": "Zonen-Entscheidungsstatus",
       "Override active (read-only):": "Override aktiv (nur Anzeige):",
       "OK": "OK",
-      "Configuration incomplete": "Konfiguration unvollständig"
+      "Configuration incomplete": "Konfiguration unvollständig",
+      "Configuration Backup / Restore": "Konfiguration sichern / wiederherstellen",
+      "Export creates a backup of all module properties, including the complete room configuration. Runtime states are not included.": "Der Export sichert alle Moduleigenschaften einschließlich der vollständigen Raumkonfiguration. Laufzeitzustände werden nicht gesichert.",
+      "Configuration Backup JSON": "Konfigurationssicherung (JSON)",
+      "Export Configuration": "Konfiguration exportieren",
+      "Import Configuration": "Konfiguration importieren",
+      "Importing replaces the current module configuration. Continue?": "Der Import ersetzt die aktuelle Modulkonfiguration. Fortfahren?"
     }
   }
 }

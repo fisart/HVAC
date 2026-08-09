@@ -2,7 +2,7 @@
 /**
  * Zoning_and_Demand_Manager
  *
- * Version: 1.4.0 (Decision status diagnostics)
+ * Version: 1.5.0 (Persistent room modes and configuration backup)
  * Vendor:  Artur Fischer & AI Consultant
  *
  * Kurzbeschreibung:
@@ -68,6 +68,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         $this->RegisterAttributeString('LastOrchestratorFlaps', '[]');
         $this->RegisterAttributeString('RoomHystState', '{}'); // per-room latched demand (bool)
         $this->RegisterAttributeString('LastDecisionFingerprint', '');
+        $this->RegisterAttributeInteger('InternalModeWriteID', 0);
 
         // ---- Status-Variablen ----
         $this->RegisterVariableBoolean('OverrideActive', 'Override active', '~Alert', 10);
@@ -126,6 +127,13 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // React immediately when selected variables change
         if ($Message === VM_UPDATE) {
+            // Ignore the synchronous notification caused by the intentional
+            // mode 2 -> mode 1 reset at the end of one-time cooling.
+            if ($SenderID === (int)$this->ReadAttributeInteger('InternalModeWriteID')) {
+                $this->log(3, 'internal_room_mode_update_ignored', ['varID' => $SenderID]);
+                return;
+            }
+
             // 1) Standalone mode link changed → re-evaluate immediately
             $link = (int)$this->ReadPropertyInteger('StandaloneModeLink'); // requires property from Create()
             if ($link > 0 && $SenderID === $link) {
@@ -136,11 +144,11 @@ class Zoning_and_Demand_Manager extends IPSModule
                 return;
             }
 
-            // 2) Any room demand variable changed → run zoning now (no timer wait)
-            //    DemandWatchIDs is maintained by setupDemandTriggers()
+            // 2) Any room mode variable changed → run zoning now (no timer wait)
+            //    DemandWatchIDs is retained as the attribute name for compatibility.
             $watch = json_decode($this->ReadAttributeString('DemandWatchIDs') ?: '[]', true);
             if (is_array($watch) && in_array($SenderID, $watch, true)) {
-                $this->log(2, 'demand_var_update_trigger', [
+                $this->log(2, 'room_mode_var_update_trigger', [
                     'varID'  => $SenderID,
                     'newVal' => @GetValue($SenderID)
                 ]);
@@ -330,6 +338,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                 $prev               = (bool)($hmap[$name] ?? false);
                 $roomMode           = ($airSollStatusVarID > 0) ? $this->GetInt($airSollStatusVarID) : 3;
                 $windowOpen         = $this->isWindowOpenStable($room);
+                $sharedModeDemandVariable = $airSollStatusVarID > 0 && $airSollStatusVarID === $demandVarID;
 
                 $roomDiagnostic = [
                     'name' => $name,
@@ -351,7 +360,8 @@ class Zoning_and_Demand_Manager extends IPSModule
                     'flapVariableID' => $flapVarID,
                     'flapCommand' => 'closed',
                     'demandVariableID' => $demandVarID,
-                    'demandOutputValue' => 0,
+                    'demandOutputValue' => null,
+                    'demandOutputSuppressedBecauseSharedWithMode' => $sharedModeDemandVariable,
                     'phaseVariableID' => $coolingPhaseVarID,
                     'phaseOutputValue' => 0
                 ];
@@ -359,7 +369,10 @@ class Zoning_and_Demand_Manager extends IPSModule
                 if ($windowOpen) {
                     $this->setFlap($room, false);
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 3);
-                    if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
+                    if ($demandVarID > 0 && !$sharedModeDemandVariable) {
+                        $this->writeVarSmart($demandVarID, 0);
+                        $roomDiagnostic['demandOutputValue'] = 0;
+                    }
                     $hmap[$name] = false;
                     $roomDiagnostic['decision'] = 'blocked_by_open_window_or_door';
                     $roomDiagnostic['phaseOutputValue'] = 3;
@@ -376,7 +389,7 @@ class Zoning_and_Demand_Manager extends IPSModule
                         ? 'one_time_cooling_until_target_is_reached'
                         : 'one_time_cooling_target_reached';
                     if (!$roomHasDemand && $airSollStatusVarID > 0) {
-                        $this->writeVarSmart($airSollStatusVarID, 1);
+                        $this->writeRoomModeSmart($airSollStatusVarID, 1);
                         $roomDiagnostic['modeResetOutputValue'] = 1;
                     }
                 } elseif ($roomMode === 3) {
@@ -406,16 +419,21 @@ class Zoning_and_Demand_Manager extends IPSModule
                 if ($roomHasDemand) {
                     $this->setFlap($room, true);
                     $anyDemand = true;
-                    if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 3);
+                    if ($demandVarID > 0 && !$sharedModeDemandVariable) {
+                        $this->writeVarSmart($demandVarID, 3);
+                        $roomDiagnostic['demandOutputValue'] = 3;
+                    }
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 2);
                     $roomDiagnostic['demand'] = true;
                     $roomDiagnostic['flapCommand'] = 'open';
-                    $roomDiagnostic['demandOutputValue'] = 3;
                     $roomDiagnostic['phaseOutputValue'] = 2;
                     $diagnostics['summary']['roomsWithDemand']++;
                 } else {
                     $this->setFlap($room, false);
-                    if ($demandVarID > 0)       $this->writeVarSmart($demandVarID, 0);
+                    if ($demandVarID > 0 && !$sharedModeDemandVariable) {
+                        $this->writeVarSmart($demandVarID, 0);
+                        $roomDiagnostic['demandOutputValue'] = 0;
+                    }
                     if ($coolingPhaseVarID > 0) $this->writeVarSmart($coolingPhaseVarID, 0);
                 }
                 $diagnostics['rooms'][] = $roomDiagnostic;
@@ -473,6 +491,153 @@ class Zoning_and_Demand_Manager extends IPSModule
                 @IPS_RunScriptText('ACIPS_ProcessLearning(' . $acipsID . ');');
             }
         }
+    }
+
+    /**
+     * Writes a complete, portable configuration backup into the open form.
+     * Runtime attributes and status variables are intentionally excluded.
+     */
+    public function UI_ExportConfig(): string
+    {
+        $config = json_decode(IPS_GetConfiguration($this->InstanceID), true);
+        if (!is_array($config)) {
+            throw new \RuntimeException('The current module configuration could not be read.');
+        }
+
+        $backup = [
+            'schema' => 'ZDM.ConfigBackup.v1',
+            'module' => 'Zoning_and_Demand_Manager',
+            'moduleVersion' => '1.5.0',
+            'exportedAt' => date(DATE_ATOM),
+            'sourceInstanceID' => $this->InstanceID,
+            'sourceInstanceName' => IPS_GetName($this->InstanceID),
+            'config' => $config
+        ];
+
+        $json = json_encode(
+            $backup,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($json === false) {
+            throw new \RuntimeException('The configuration backup could not be encoded.');
+        }
+
+        $this->UpdateFormField('ConfigBackupJson', 'value', $json);
+        return $json;
+    }
+
+    /**
+     * Validates and imports a backup created by UI_ExportConfig().
+     * Only registered configuration properties are accepted.
+     */
+    public function UI_ImportConfig(string $backupJson): string
+    {
+        $backupJson = trim($backupJson);
+        if ($backupJson === '') {
+            throw new \InvalidArgumentException('No configuration backup was entered.');
+        }
+
+        $backup = json_decode($backupJson, true);
+        if (!is_array($backup) || json_last_error() !== JSON_ERROR_NONE) {
+            throw new \InvalidArgumentException('The configuration backup is not valid JSON.');
+        }
+        if (($backup['schema'] ?? '') !== 'ZDM.ConfigBackup.v1') {
+            throw new \InvalidArgumentException('The backup schema is not supported.');
+        }
+        if (($backup['module'] ?? '') !== 'Zoning_and_Demand_Manager') {
+            throw new \InvalidArgumentException('The backup belongs to a different module.');
+        }
+        if (!isset($backup['config']) || !is_array($backup['config'])) {
+            throw new \InvalidArgumentException('The backup does not contain a module configuration.');
+        }
+
+        $boolProperties = [
+            'StandaloneMode',
+            'EmergencyCloseFlaps'
+        ];
+        $intProperties = [
+            'StandaloneModeLink',
+            'TimerInterval',
+            'StandalonePowerVar',
+            'StandaloneFanVar',
+            'HeatingActiveLink',
+            'VentilationActiveLink',
+            'MainACOnOffLink',
+            'MainFanControlLink',
+            'MainACPowerLink',
+            'MainFanSpeedLink',
+            'CoilTemperatureLink',
+            'EmergencyFanPercent',
+            'ConstantPower',
+            'ConstantFanSpeed',
+            'WindowDebounceSec',
+            'LogLevel',
+            'AdaptiveInstanceID'
+        ];
+        $floatProperties = [
+            'Hysteresis',
+            'EmergencyShutdownTemp',
+            'EmergencyRestartTemp'
+        ];
+        $stringProperties = ['ControlledRooms'];
+
+        $incoming = $backup['config'];
+        $validated = [];
+        foreach ($boolProperties as $property) {
+            if (array_key_exists($property, $incoming)) {
+                if (!is_bool($incoming[$property])) {
+                    throw new \InvalidArgumentException('Invalid Boolean property: ' . $property);
+                }
+                $validated[$property] = $incoming[$property];
+            }
+        }
+        foreach ($intProperties as $property) {
+            if (array_key_exists($property, $incoming)) {
+                if (!is_int($incoming[$property])) {
+                    throw new \InvalidArgumentException('Invalid integer property: ' . $property);
+                }
+                $validated[$property] = $incoming[$property];
+            }
+        }
+        foreach ($floatProperties as $property) {
+            if (array_key_exists($property, $incoming)) {
+                if (!is_int($incoming[$property]) && !is_float($incoming[$property])) {
+                    throw new \InvalidArgumentException('Invalid numeric property: ' . $property);
+                }
+                $validated[$property] = (float)$incoming[$property];
+            }
+        }
+        foreach ($stringProperties as $property) {
+            if (array_key_exists($property, $incoming)) {
+                if (!is_string($incoming[$property])) {
+                    throw new \InvalidArgumentException('Invalid string property: ' . $property);
+                }
+                $validated[$property] = $incoming[$property];
+            }
+        }
+
+        if (isset($validated['ControlledRooms'])) {
+            $rooms = json_decode($validated['ControlledRooms'], true);
+            if (!is_array($rooms) || json_last_error() !== JSON_ERROR_NONE) {
+                throw new \InvalidArgumentException('ControlledRooms does not contain a valid JSON array.');
+            }
+        }
+
+        $current = json_decode(IPS_GetConfiguration($this->InstanceID), true);
+        if (!is_array($current)) {
+            throw new \RuntimeException('The current module configuration could not be read.');
+        }
+
+        $merged = array_replace($current, $validated);
+        $encoded = json_encode($merged, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+        if ($encoded === false) {
+            throw new \RuntimeException('The imported configuration could not be encoded.');
+        }
+
+        IPS_SetConfiguration($this->InstanceID, $encoded);
+        IPS_ApplyChanges($this->InstanceID);
+        $this->ReloadForm();
+        return 'Configuration imported successfully. Please verify the object IDs and room assignments.';
     }
 
 
@@ -595,6 +760,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         $hyst = (float)$this->ReadPropertyFloat('Hysteresis');
         $hmap = $this->getHystState(); // latched hysteresis states { roomName => bool }
+        $standalone = $this->isStandalone();
 
         // NEW: accumulators for weighted metrics
         $wDevSum = 0.0;   // Σ (dev * size) for hot rooms
@@ -640,7 +806,11 @@ class Zoning_and_Demand_Manager extends IPSModule
                 if (array_key_exists($nameKey, $flapMap)) $effectiveDemand = (bool)$flapMap[$nameKey];
             } else {
                 $demVarID = (int)($r['demandID'] ?? $r['bedarfID'] ?? $r['bedarfsausgabeID'] ?? 0);
-                if ($demVarID > 0 && IPS_VariableExists($demVarID)) {
+                $modeVarID = (int)($r['airSollStatusID'] ?? 0);
+                $sharedModeDemandVariable = $modeVarID > 0 && $modeVarID === $demVarID;
+                if (($standalone || $sharedModeDemandVariable) && array_key_exists($name, $hmap)) {
+                    $effectiveDemand = (bool)$hmap[$name];
+                } elseif ($demVarID > 0 && IPS_VariableExists($demVarID)) {
                     $dem = (int)@GetValue($demVarID);
                     $effectiveDemand = ($dem === 2 || $dem === 3);
                 } elseif (array_key_exists($name, $hmap)) {
@@ -794,14 +964,13 @@ class Zoning_and_Demand_Manager extends IPSModule
             }
         }
 
-        // Collect demand variable IDs from rooms
+        // Collect room mode input IDs. Output variables must not trigger the
+        // controller again after the controller itself has written them.
         $watch = [];
         foreach ($this->getRooms() as $r) {
-            foreach (['demandID','bedarfsausgabeID','bedarfID'] as $key) {
-                $vid = (int)($r[$key] ?? 0);
-                if ($vid > 0 && IPS_VariableExists($vid)) {
-                    $watch[$vid] = true; // de-dup
-                }
+            $vid = (int)($r['airSollStatusID'] ?? 0);
+            if ($vid > 0 && IPS_VariableExists($vid)) {
+                $watch[$vid] = true; // de-dup
             }
         }
 
@@ -813,7 +982,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // Persist the current set
         $this->WriteAttributeString('DemandWatchIDs', json_encode($ids));
-        $this->log(2, 'armed_demand_triggers', ['count' => count($ids)]);
+        $this->log(2, 'armed_room_mode_triggers', ['count' => count($ids)]);
     }
 
     private function isDemandWatchID(int $id): bool
@@ -1428,6 +1597,24 @@ class Zoning_and_Demand_Manager extends IPSModule
         return is_numeric($v) ? (float)$v : NAN;
     }
 
+    /**
+     * Changes a persistent room mode without re-triggering the same zoning
+     * cycle through MessageSink. Used only for the intentional 2 -> 1 reset.
+     */
+    private function writeRoomModeSmart(int $varID, int $mode): void
+    {
+        if ($varID <= 0 || !IPS_VariableExists($varID)) {
+            return;
+        }
+
+        $this->WriteAttributeInteger('InternalModeWriteID', $varID);
+        try {
+            $this->writeVarSmart($varID, $mode);
+        } finally {
+            $this->WriteAttributeInteger('InternalModeWriteID', 0);
+        }
+    }
+
     private function clamp(int $val, int $min, int $max): int
     {
         if ($val < $min) return $min;
@@ -1442,7 +1629,7 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     private function publishDecisionStatus(array $status): void
     {
-        $status['statusSchemaVersion'] = 1;
+        $status['statusSchemaVersion'] = 2;
 
         $canonical = json_encode(
             $status,
