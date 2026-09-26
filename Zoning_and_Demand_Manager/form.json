@@ -22,6 +22,7 @@
 
     { "type": "Label", "label": "--- System-Wide Links ---" },
     { "type": "SelectVariable", "name": "HeatingActiveLink", "caption": "Heating Active Link (disables cooling)" },
+    { "type": "SelectVariable", "name": "WinterModeID", "caption": "Winter status (Boolean: true = winter; cooling inactive)" },
     { "type": "SelectVariable", "name": "VentilationActiveLink", "caption": "Ventilation Active Link (disables cooling)" },
     { "type": "SelectVariable", "name": "MainACOnOffLink", "caption": "Main AC Unit (On/Off or Value)" },
     { "type": "SelectVariable", "name": "MainFanControlLink", "caption": "Main Fan Control (On/Off or Value)" },
