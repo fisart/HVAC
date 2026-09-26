@@ -34,6 +34,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // Systemweite Verknüpfungen (IDs von Variablen/Aktoren)
         $this->RegisterPropertyInteger('HeatingActiveLink', 0);
+        $this->RegisterPropertyInteger('WinterModeID', 0); // Boolean: true = winter; cooling must not control shared devices
         $this->RegisterPropertyInteger('VentilationActiveLink', 0);
         $this->RegisterPropertyInteger('MainACOnOffLink', 0);     // bool oder integer (0..100)
         $this->RegisterPropertyInteger('MainFanControlLink', 0);  // bool oder integer (0..100)
@@ -91,6 +92,10 @@ class Zoning_and_Demand_Manager extends IPSModule
         if ($link > 0 && IPS_VariableExists($link)) {
             $this->RegisterMessage($link, VM_UPDATE);
         }
+        $winterID = (int)$this->ReadPropertyInteger('WinterModeID');
+        if ($winterID > 0 && IPS_VariableExists($winterID)) {
+            $this->RegisterMessage($winterID, VM_UPDATE);
+        }
 
         if (IPS_GetKernelRunlevel() !== KR_READY) {
             // Re-run ApplyChanges when kernel becomes ready
@@ -127,6 +132,15 @@ class Zoning_and_Demand_Manager extends IPSModule
 
         // React immediately when selected variables change
         if ($Message === VM_UPDATE) {
+            $winterID = (int)$this->ReadPropertyInteger('WinterModeID');
+            if ($winterID > 0 && $SenderID === $winterID) {
+                // Entering winter does not issue OFF/0 or flap commands.
+                // Leaving winter resumes normal evaluation immediately.
+                if (!$this->isWinterBlocked()) {
+                    $this->ProcessZoning();
+                }
+                return;
+            }
             // Ignore the synchronous notification caused by the intentional
             // mode 2 -> mode 1 reset at the end of one-time cooling.
             if ($SenderID === (int)$this->ReadAttributeInteger('InternalModeWriteID')) {
@@ -162,6 +176,9 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function ProcessZoning(): void
     {
+        if ($this->isWinterBlocked()) {
+            return; // No actuator, room-output, emergency, or status writes in winter.
+        }
         // 1. Technical Guards
         if (IPS_GetKernelRunlevel() !== KR_READY) {
             $this->log(1, 'kernel_not_ready_skip');
@@ -565,6 +582,7 @@ class Zoning_and_Demand_Manager extends IPSModule
         ];
         $intProperties = [
             'StandaloneModeLink',
+            'WinterModeID',
             'TimerInterval',
             'StandalonePowerVar',
             'StandaloneFanVar',
@@ -656,6 +674,7 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     public function SetOverrideMode(bool $on): void
     {
+        if ($this->isWinterBlocked()) return;
            // NEUER WÄCHTER:
         if ($this->isStandalone()) {
             $this->log(2, 'ignore_set_override', ['reason' => 'Standalone Mode is active']);
@@ -701,6 +720,7 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     public function CommandFlaps(string $stageName, string $flapConfigJson): void
     {
+        if ($this->isWinterBlocked()) return;
 
           // NEUER WÄCHTER:
         if ($this->isStandalone()) {
@@ -736,6 +756,7 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     public function CommandSystem(int $powerPercent, int $fanPercent): void
     {
+        if ($this->isWinterBlocked()) return;
             // NEUER WÄCHTER:
         if ($this->isStandalone()) {
             $this->log(2, 'ignore_command_system', ['reason' => 'Standalone Mode is active', 'power' => $powerPercent, 'fan' => $fanPercent]);
@@ -915,6 +936,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function HandleCoilBelowThreshold(float $coilTemp, float $threshold): void
     {
+        if ($this->isWinterBlocked()) return;
         $this->WriteAttributeBoolean('EmergencyShutdownActive', true);
         $this->log(0, 'EMERGENCY_BY_EVENT', ['coilTemp'=>$coilTemp, 'threshold'=>$threshold]);
 
@@ -1048,6 +1070,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     public function HandleCoilAboveRestart(float $coilTemp, float $restartThr): void
     {
+        if ($this->isWinterBlocked()) return;
         // Only act if we are actually in emergency
         if (!$this->ReadAttributeBoolean('EmergencyShutdownActive')) {
             //$this->log(3, 'restart_event_ignored_not_in_emergency', ['coilTemp'=>$coilTemp, 'thr'=>$restartThr]);
@@ -1130,6 +1153,7 @@ class Zoning_and_Demand_Manager extends IPSModule
      */
     private function setFlap(array $room, bool $open): void
     {
+        if ($this->isWinterBlocked()) return;
         $varID = (int)($room['flapID'] ?? 0);
         if ($varID <= 0) {
             $this->log(1, 'flap_var_missing', ['room' => $room['name'] ?? 'room']);
@@ -1236,6 +1260,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     private function systemSetPercent(int $power, int $fan): void
     {
+        if ($this->isWinterBlocked()) return;
         // Werte auf 0-100 begrenzen (bleibt gleich)
         $power = $this->clamp($power, 0, 100);
         $fan   = $this->clamp($fan,   0, 100);
@@ -1271,6 +1296,7 @@ class Zoning_and_Demand_Manager extends IPSModule
 
     private function writeVarSmart(int $varID, $value): void
     {
+        if ($this->isWinterBlocked()) return;
         if ($varID <= 0 || !IPS_VariableExists($varID)) {
             return;
         }
@@ -1607,7 +1633,20 @@ class Zoning_and_Demand_Manager extends IPSModule
         $h = ($heat > 0) ? $this->varTruthy($heat) : false;
         $v = ($vent > 0) ? $this->varTruthy($vent) : false;
 
-        return ($h || $v);
+        return ($this->isWinterBlocked() || $h || $v);
+    }
+
+    /**
+     * A configured but invalid input blocks cooling as well. An unconfigured
+     * ID preserves the behavior of existing installations until configured.
+     */
+    private function isWinterBlocked(): bool
+    {
+        $id = (int)$this->ReadPropertyInteger('WinterModeID');
+        if ($id === 0) return false;
+        if ($id < 0 || !IPS_VariableExists($id)) return true;
+        if (IPS_GetVariable($id)['VariableType'] !== 0) return true;
+        return GetValueBoolean($id);
     }
 
     private function varTruthy(int $varID): bool

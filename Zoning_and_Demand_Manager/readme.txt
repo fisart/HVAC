@@ -9,6 +9,20 @@ Dieses Modul agiert als Master-Regel-Engine für ein Mehrzonen-HVAC-System. Es s
 
 Das Modul steuert direkt die Luftklappen der einzelnen Zonen und signalisiert den Kühlbedarf an das adaptive Modul.
 
+### Winterstatus
+Im Feld `Winter status` wird die Boolean-Variable `IS_WINTER` ausgewählt.
+Bei `true` lässt dieses Modul die gemeinsam genutzten Geräte vollständig in Ruhe:
+Es sendet weder Ein- noch Aus-Befehle an Anlage, Lüfter und Klappen und
+verändert keine Raumausgänge. Das gilt auch für Befehle des Orchestrators und
+für den separaten Spulentemperatur-Trigger. Der letzte Gerätezustand wird beim
+Wechsel in den Winter nicht durch dieses Modul zurückgesetzt. Wenn der Status
+wieder `false` wird, läuft unmittelbar eine neue Zonenprüfung.
+
+Eine konfigurierte, aber ungültige Objekt-ID oder eine Variable, die nicht vom
+Typ Boolean ist, blockiert die Kühlung ebenfalls. Bei ID `0` bleibt die
+bisherige Steuerung zur Kompatibilität mit bestehenden Instanzen aktiv. Die
+ID muss daher für den Schutz im Konfigurationsformular eingetragen werden.
+
 ### Maximale AC-Leistung bei nur einem Raum (ab Version 1.6.0)
 Für jeden Raum kann eine maximale AC-Leistung zwischen 1 und 100 Prozent
 eingestellt werden. Die Grenze wird ausschließlich im Standalone-Modus und nur
